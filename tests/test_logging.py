@@ -1,10 +1,12 @@
 import logging
+import queue
 import time
 import traceback
 
 from django_helm.logging import (
     _map_level,
     _record_to_otlp,
+    HelmLogHandler,
 )
 
 
@@ -98,3 +100,46 @@ class TestRecordToOtlp:
         record = self._make_record(msg='clean log')
         otlp = _record_to_otlp(record)
         assert otlp['body']['stringValue'] == 'clean log'
+
+
+class TestHelmLogHandler:
+    def test_emit_puts_record_on_queue(self):
+        q = queue.Queue()
+        handler = HelmLogHandler(q)
+        logger = logging.getLogger('test.handler')
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        try:
+            logger.info('hello from handler')
+        finally:
+            logger.removeHandler(handler)
+
+        assert not q.empty()
+        otlp = q.get_nowait()
+        assert otlp['severityNumber'] == 9
+        assert otlp['body']['stringValue'] == 'hello from handler'
+
+    def test_recursion_guard(self):
+        q = queue.Queue()
+        handler = HelmLogHandler(q)
+
+        handler._guard.emitting = True
+        record = logging.LogRecord(
+            name='test', level=logging.INFO, pathname='', lineno=0,
+            msg='should be dropped', args=(), exc_info=None,
+        )
+        handler.emit(record)
+
+        assert q.empty()
+        handler._guard.emitting = False
+
+    def test_handler_does_not_propagate_errors(self):
+        q = queue.Queue()
+        handler = HelmLogHandler(q)
+
+        record = logging.LogRecord(
+            name='test', level=logging.INFO, pathname='', lineno=0,
+            msg='normal message', args=(), exc_info=None,
+        )
+        handler.emit(record)
+        assert not q.empty()

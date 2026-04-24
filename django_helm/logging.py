@@ -1,6 +1,7 @@
 """Helm logging handler — ships Python logs to Helm's OTLP endpoint."""
 
 import logging
+import threading
 import traceback
 
 
@@ -59,3 +60,29 @@ def _record_to_otlp(record):
             {'key': 'funcName', 'value': {'stringValue': record.funcName or ''}},
         ],
     }
+
+
+class _RecursionGuard(threading.local):
+    """Thread-local flag to prevent the handler from re-emitting its own logs."""
+    emitting = False
+
+
+class HelmLogHandler(logging.Handler):
+    """Logging handler that converts records to OTLP format and puts them on a queue."""
+
+    def __init__(self, log_queue, level=logging.DEBUG):
+        super().__init__(level=level)
+        self._queue = log_queue
+        self._guard = _RecursionGuard()
+
+    def emit(self, record):
+        if self._guard.emitting:
+            return
+        self._guard.emitting = True
+        try:
+            otlp = _record_to_otlp(record)
+            self._queue.put_nowait(otlp)
+        except Exception:
+            pass  # Silently drop — never disrupt the application
+        finally:
+            self._guard.emitting = False
