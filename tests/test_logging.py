@@ -7,6 +7,7 @@ from django_helm.logging import (
     _map_level,
     _record_to_otlp,
     HelmLogHandler,
+    _build_otlp_payload,
 )
 
 
@@ -143,3 +144,49 @@ class TestHelmLogHandler:
         )
         handler.emit(record)
         assert not q.empty()
+
+
+class TestBuildOtlpPayload:
+    def _make_otlp_record(self, msg='test', severity_number=9, severity_text='INFO'):
+        return {
+            'timeUnixNano': '1714000000000000000',
+            'severityNumber': severity_number,
+            'severityText': severity_text,
+            'body': {'stringValue': msg},
+            'attributes': [
+                {'key': 'logger', 'value': {'stringValue': 'test'}},
+            ],
+        }
+
+    def test_single_record(self):
+        resource_attrs = [
+            {'key': 'helm.environment', 'value': {'stringValue': 'staging'}},
+            {'key': 'service.name', 'value': {'stringValue': 'backend'}},
+        ]
+        records = [self._make_otlp_record()]
+        payload = _build_otlp_payload(resource_attrs, records)
+
+        assert 'resourceLogs' in payload
+        assert len(payload['resourceLogs']) == 1
+
+        rl = payload['resourceLogs'][0]
+        assert rl['resource']['attributes'] == resource_attrs
+        assert rl['scopeLogs'][0]['scope']['name'] == 'django_helm'
+        assert len(rl['scopeLogs'][0]['logRecords']) == 1
+
+    def test_multiple_records(self):
+        resource_attrs = [
+            {'key': 'helm.environment', 'value': {'stringValue': 'prod'}},
+        ]
+        records = [self._make_otlp_record(msg='first'), self._make_otlp_record(msg='second')]
+        payload = _build_otlp_payload(resource_attrs, records)
+
+        log_records = payload['resourceLogs'][0]['scopeLogs'][0]['logRecords']
+        assert len(log_records) == 2
+        assert log_records[0]['body']['stringValue'] == 'first'
+        assert log_records[1]['body']['stringValue'] == 'second'
+
+    def test_empty_records(self):
+        payload = _build_otlp_payload([], [])
+        log_records = payload['resourceLogs'][0]['scopeLogs'][0]['logRecords']
+        assert len(log_records) == 0

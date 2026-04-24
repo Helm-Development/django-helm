@@ -62,6 +62,25 @@ def _record_to_otlp(record):
     }
 
 
+def _build_otlp_payload(resource_attrs, otlp_records):
+    """Build an OTLP/HTTP JSON payload from resource attributes and log records."""
+    return {
+        'resourceLogs': [
+            {
+                'resource': {
+                    'attributes': resource_attrs,
+                },
+                'scopeLogs': [
+                    {
+                        'scope': {'name': 'django_helm'},
+                        'logRecords': otlp_records,
+                    }
+                ],
+            }
+        ]
+    }
+
+
 class _RecursionGuard(threading.local):
     """Thread-local flag to prevent the handler from re-emitting its own logs."""
     emitting = False
