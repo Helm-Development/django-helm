@@ -1,0 +1,13 @@
+[project]
+name = "django-helm"
+version = "0.1.0"
+description = "Django integration for Helm — logging, attribution, and more"
+requires-python = ">=3.10"
+dependencies = ["requests"]
+
+[project.optional-dependencies]
+dev = ["pytest", "requests"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
