@@ -105,3 +105,61 @@ class HelmLogHandler(logging.Handler):
             pass  # Silently drop — never disrupt the application
         finally:
             self._guard.emitting = False
+
+
+import json
+import queue as queue_module
+
+import requests
+
+
+class HelmBatchWorker(threading.Thread):
+    """Daemon thread that drains a queue and ships batched OTLP payloads to Helm."""
+
+    def __init__(self, log_queue, resource_attrs, api_key, endpoint,
+                 batch_size=50, flush_interval=5.0):
+        super().__init__(daemon=True)
+        self._queue = log_queue
+        self._resource_attrs = resource_attrs
+        self._api_key = api_key
+        self._endpoint = endpoint
+        self._batch_size = batch_size
+        self._flush_interval = flush_interval
+        self._stop_event = threading.Event()
+
+    def run(self):
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=self._flush_interval)
+            self._flush_batch()
+
+    def stop(self):
+        self._stop_event.set()
+
+    def flush(self):
+        """Drain remaining queue items and send a final batch."""
+        self._flush_batch()
+
+    def _flush_batch(self):
+        records = []
+        try:
+            while len(records) < self._batch_size:
+                records.append(self._queue.get_nowait())
+        except queue_module.Empty:
+            pass
+
+        if not records:
+            return
+
+        payload = _build_otlp_payload(self._resource_attrs, records)
+        try:
+            requests.post(
+                self._endpoint,
+                data=json.dumps(payload),
+                headers={
+                    'Authorization': f'Bearer {self._api_key}',
+                    'Content-Type': 'application/json',
+                },
+                timeout=10,
+            )
+        except Exception:
+            pass  # Silently drop — ephemeral logs

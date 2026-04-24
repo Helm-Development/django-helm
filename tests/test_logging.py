@@ -1,13 +1,16 @@
+import json
 import logging
 import queue
 import time
 import traceback
+from unittest.mock import patch, MagicMock
 
 from django_helm.logging import (
     _map_level,
     _record_to_otlp,
     HelmLogHandler,
     _build_otlp_payload,
+    HelmBatchWorker,
 )
 
 
@@ -190,3 +193,98 @@ class TestBuildOtlpPayload:
         payload = _build_otlp_payload([], [])
         log_records = payload['resourceLogs'][0]['scopeLogs'][0]['logRecords']
         assert len(log_records) == 0
+
+
+class TestHelmBatchWorker:
+    def _make_resource_attrs(self):
+        return [
+            {'key': 'helm.environment', 'value': {'stringValue': 'test'}},
+        ]
+
+    def _make_otlp_record(self, msg='test'):
+        return {
+            'timeUnixNano': '1714000000000000000',
+            'severityNumber': 9,
+            'severityText': 'INFO',
+            'body': {'stringValue': msg},
+            'attributes': [],
+        }
+
+    def test_flushes_on_batch_size(self):
+        q = queue.Queue()
+        resource_attrs = self._make_resource_attrs()
+        worker = HelmBatchWorker(
+            q, resource_attrs,
+            api_key='test-key',
+            endpoint='https://example.com/api/v1/logs',
+            batch_size=3,
+            flush_interval=60.0,
+        )
+
+        for i in range(3):
+            q.put(self._make_otlp_record(msg=f'msg-{i}'))
+
+        with patch('django_helm.logging.requests') as mock_requests:
+            mock_requests.post.return_value = MagicMock(status_code=200)
+            worker._flush_batch()
+
+        mock_requests.post.assert_called_once()
+        call_kwargs = mock_requests.post.call_args
+        payload = json.loads(call_kwargs.kwargs['data'])
+        records = payload['resourceLogs'][0]['scopeLogs'][0]['logRecords']
+        assert len(records) == 3
+
+    def test_sends_correct_headers(self):
+        q = queue.Queue()
+        resource_attrs = self._make_resource_attrs()
+        worker = HelmBatchWorker(
+            q, resource_attrs,
+            api_key='my-api-key',
+            endpoint='https://helm.example.com/api/v1/logs',
+            batch_size=50,
+            flush_interval=5.0,
+        )
+        q.put(self._make_otlp_record())
+
+        with patch('django_helm.logging.requests') as mock_requests:
+            mock_requests.post.return_value = MagicMock(status_code=200)
+            worker._flush_batch()
+
+        call_kwargs = mock_requests.post.call_args
+        assert call_kwargs.kwargs['headers']['Authorization'] == 'Bearer my-api-key'
+        assert call_kwargs.kwargs['headers']['Content-Type'] == 'application/json'
+        assert call_kwargs.args[0] == 'https://helm.example.com/api/v1/logs'
+
+    def test_silently_drops_on_network_error(self):
+        q = queue.Queue()
+        resource_attrs = self._make_resource_attrs()
+        worker = HelmBatchWorker(
+            q, resource_attrs,
+            api_key='test-key',
+            endpoint='https://example.com/api/v1/logs',
+            batch_size=50,
+            flush_interval=5.0,
+        )
+        q.put(self._make_otlp_record())
+
+        with patch('django_helm.logging.requests') as mock_requests:
+            mock_requests.post.side_effect = Exception('connection refused')
+            worker._flush_batch()
+
+        assert q.empty()
+
+    def test_empty_queue_does_not_send(self):
+        q = queue.Queue()
+        resource_attrs = self._make_resource_attrs()
+        worker = HelmBatchWorker(
+            q, resource_attrs,
+            api_key='test-key',
+            endpoint='https://example.com/api/v1/logs',
+            batch_size=50,
+            flush_interval=5.0,
+        )
+
+        with patch('django_helm.logging.requests') as mock_requests:
+            worker._flush_batch()
+
+        mock_requests.post.assert_not_called()
