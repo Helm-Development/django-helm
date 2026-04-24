@@ -11,6 +11,8 @@ from django_helm.logging import (
     HelmLogHandler,
     _build_otlp_payload,
     HelmBatchWorker,
+    init,
+    _state,
 )
 
 
@@ -288,3 +290,121 @@ class TestHelmBatchWorker:
             worker._flush_batch()
 
         mock_requests.post.assert_not_called()
+
+
+class TestInit:
+    def setup_method(self):
+        """Clean up any previous init state."""
+        if _state.get('handler'):
+            logging.getLogger().removeHandler(_state['handler'])
+        if _state.get('worker'):
+            _state['worker'].stop()
+        _state.clear()
+
+    def teardown_method(self):
+        """Clean up after test."""
+        if _state.get('handler'):
+            logging.getLogger().removeHandler(_state['handler'])
+        if _state.get('worker'):
+            _state['worker'].stop()
+        _state.clear()
+
+    def test_attaches_handler_to_root_logger(self):
+        with patch('django_helm.logging.requests'):
+            init(
+                api_key='test-key',
+                endpoint='https://example.com/api/v1/logs',
+                environment='test',
+            )
+
+        root = logging.getLogger()
+        assert any(isinstance(h, HelmLogHandler) for h in root.handlers)
+
+    def test_starts_worker_thread(self):
+        with patch('django_helm.logging.requests'):
+            init(
+                api_key='test-key',
+                endpoint='https://example.com/api/v1/logs',
+                environment='test',
+            )
+
+        assert _state['worker'].is_alive()
+
+    def test_idempotent_replaces_handler(self):
+        with patch('django_helm.logging.requests'):
+            init(
+                api_key='key-1',
+                endpoint='https://example.com/api/v1/logs',
+                environment='test',
+            )
+            first_handler = _state['handler']
+            first_worker = _state['worker']
+
+            init(
+                api_key='key-2',
+                endpoint='https://example.com/api/v1/logs',
+                environment='test',
+            )
+            second_handler = _state['handler']
+
+        root = logging.getLogger()
+        assert first_handler not in root.handlers
+        assert second_handler in root.handlers
+        assert not first_worker.is_alive() or first_worker._stop_event.is_set()
+
+    def test_default_values(self):
+        with patch('django_helm.logging.requests'):
+            init(
+                api_key='test-key',
+                endpoint='https://example.com/api/v1/logs',
+                environment='staging',
+            )
+
+        worker = _state['worker']
+        assert worker._batch_size == 50
+        assert worker._flush_interval == 5.0
+
+    def test_custom_service_name_in_resource_attrs(self):
+        with patch('django_helm.logging.requests'):
+            init(
+                api_key='test-key',
+                endpoint='https://example.com/api/v1/logs',
+                environment='prod',
+                service_name='celery-worker',
+                commit_sha='deadbeef',
+            )
+
+        worker = _state['worker']
+        attr_dict = {a['key']: a['value']['stringValue'] for a in worker._resource_attrs}
+        assert attr_dict['helm.environment'] == 'prod'
+        assert attr_dict['service.name'] == 'celery-worker'
+        assert attr_dict['helm.commit.sha'] == 'deadbeef'
+
+    def test_end_to_end_log_reaches_worker(self):
+        with patch('django_helm.logging.requests') as mock_requests:
+            mock_requests.post.return_value = MagicMock(status_code=200)
+            init(
+                api_key='test-key',
+                endpoint='https://example.com/api/v1/logs',
+                environment='test',
+                batch_size=1,
+                flush_interval=0.1,
+            )
+
+            root = logging.getLogger()
+            old_level = root.level
+            root.setLevel(logging.DEBUG)
+
+            test_logger = logging.getLogger('test.e2e')
+            test_logger.info('end-to-end test')
+
+            time.sleep(0.5)
+
+            assert mock_requests.post.called
+            call_kwargs = mock_requests.post.call_args
+            payload = json.loads(call_kwargs.kwargs['data'])
+            records = payload['resourceLogs'][0]['scopeLogs'][0]['logRecords']
+            found = any(r['body']['stringValue'] == 'end-to-end test' for r in records)
+            assert found
+
+            root.setLevel(old_level)

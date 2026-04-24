@@ -163,3 +163,62 @@ class HelmBatchWorker(threading.Thread):
             )
         except Exception:
             pass  # Silently drop — ephemeral logs
+
+
+import atexit
+
+# Module-level state for idempotent init
+_state = {}
+
+
+def _build_resource_attrs(environment, commit_sha, service_name):
+    """Build the OTLP resource attributes list."""
+    attrs = [
+        {'key': 'helm.environment', 'value': {'stringValue': environment}},
+        {'key': 'service.name', 'value': {'stringValue': service_name}},
+    ]
+    if commit_sha:
+        attrs.append({'key': 'helm.commit.sha', 'value': {'stringValue': commit_sha}})
+    return attrs
+
+
+def init(api_key, endpoint, environment, commit_sha='', service_name='django',
+         level='DEBUG', batch_size=50, flush_interval=5.0):
+    """Initialize Helm logging. Call once in settings.py.
+
+    Attaches a handler to the root logger that ships logs to Helm's OTLP
+    endpoint via a background thread.
+    """
+    # Tear down previous init if any
+    if _state.get('handler'):
+        logging.getLogger().removeHandler(_state['handler'])
+    if _state.get('worker'):
+        _state['worker'].stop()
+
+    # Build resource attributes
+    resource_attrs = _build_resource_attrs(environment, commit_sha, service_name)
+
+    # Create queue, handler, and worker
+    log_queue = queue_module.Queue()
+    log_level = getattr(logging, level.upper(), logging.DEBUG)
+
+    handler = HelmLogHandler(log_queue, level=log_level)
+    worker = HelmBatchWorker(
+        log_queue, resource_attrs,
+        api_key=api_key,
+        endpoint=endpoint,
+        batch_size=batch_size,
+        flush_interval=flush_interval,
+    )
+
+    # Attach handler and start worker
+    logging.getLogger().addHandler(handler)
+    worker.start()
+
+    # Register atexit flush
+    atexit.register(worker.flush)
+
+    # Store state for idempotent re-init
+    _state['handler'] = handler
+    _state['worker'] = worker
+    _state['queue'] = log_queue
