@@ -63,7 +63,7 @@ class ApiHitMiddleware:
             if pat.match(path):
                 return True
         if self._allow_patterns is not None:
-            if not any(p.search(path) for p in self._allow_patterns):
+            if not any(p.match(path) for p in self._allow_patterns):
                 return True
         return False
 

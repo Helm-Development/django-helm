@@ -210,3 +210,46 @@ class TestFailureIsolation:
             request.user = authed_user
             resp = mw(request)
             assert resp.status_code == 200
+
+
+class TestAllowPaths:
+    @pytest.fixture
+    def allow_settings(self):
+        from django.test import override_settings
+        return override_settings(HELM_ANALYTICS={
+            'project': 'p', 'sas_token': 't', 'api_base_url': 'https://h.test',
+            'user_hash_salt': 's', 'deny_paths': [],
+            'allow_paths': [r'^/api/'],   # anchored to start
+            'ip_precision': 'full',
+            'batch_size': 50, 'batch_interval_s': 5.0, 'queue_max': 100,
+        })
+
+    def test_allow_path_matches(self, rf, captured_enqueues, allow_settings):
+        """A path matching an allow pattern is recorded."""
+        from django_helm.analytics.middleware import ApiHitMiddleware
+        with allow_settings:
+            mw = ApiHitMiddleware(lambda req: _make_response())
+            request = rf.get('/api/foo/')
+            request.user = MagicMock(is_authenticated=False)
+            mw(request)
+            assert captured_enqueues.called
+
+    def test_allow_path_anchored_not_substring(self, rf, captured_enqueues, allow_settings):
+        """Allow patterns must be start-anchored — /internal/api/ does NOT match ^/api/."""
+        from django_helm.analytics.middleware import ApiHitMiddleware
+        with allow_settings:
+            mw = ApiHitMiddleware(lambda req: _make_response())
+            request = rf.get('/internal/api/x/')
+            request.user = MagicMock(is_authenticated=False)
+            mw(request)
+            assert not captured_enqueues.called
+
+    def test_allow_path_no_match_skipped(self, rf, captured_enqueues, allow_settings):
+        """A path not matching any allow pattern is skipped."""
+        from django_helm.analytics.middleware import ApiHitMiddleware
+        with allow_settings:
+            mw = ApiHitMiddleware(lambda req: _make_response())
+            request = rf.get('/home/')
+            request.user = MagicMock(is_authenticated=False)
+            mw(request)
+            assert not captured_enqueues.called
