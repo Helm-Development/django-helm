@@ -33,7 +33,7 @@ Logging is gated twice. Helm never mints a token for production, so
 `init_from_env()` silently no-ops there. As a second line of defense, both
 `init_from_env()` and the explicit `init(...)` refuse to ship — and emit one
 warning — when `HELM_ENVIRONMENT` looks production-like (`prod`, `production`,
-`prod-*`, `production-*`).
+`prod-*`, or any value starting with `production`).
 
 ### Observability
 
