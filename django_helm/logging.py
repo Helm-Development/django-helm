@@ -21,7 +21,10 @@ _LEVEL_MAP = {
 
 _LEVEL_THRESHOLDS = sorted(_LEVEL_MAP.keys())
 
-# --- Process-local drop metric -------------------------------------------
+# Process-local drop metric. Named metrics_snapshot()/reset_metrics() rather than
+# the bare snapshot()/reset() used by analytics/metrics.py: these live at the top
+# level of the logging module (not a dedicated `metrics` submodule), so the longer
+# names stay unambiguous at the call site, e.g. hlog.metrics_snapshot().
 _metrics_lock = threading.Lock()
 _metrics = {'log_drops_total': 0}
 
