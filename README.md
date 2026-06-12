@@ -2,6 +2,50 @@
 
 Django integration for Helm — logging, analytics, and more.
 
+## Logging
+
+Ships Python logs to Helm's ephemeral OTLP sink for **non-production** environments
+(PR builds, staging). Production should use Sentry — Helm logging deliberately
+no-ops there.
+
+### Setup
+
+In a Helm-provisioned environment the four `HELM_*` vars are injected for you, so
+setup is one line in `settings.py`:
+
+```python
+from django_helm.logging import init_from_env
+init_from_env()
+```
+
+`init_from_env()` reads:
+
+| Env var | Purpose |
+|---------|---------|
+| `HELM_INGEST_TOKEN` | Ephemeral ingest credential (`hlit_…`). Absent ⇒ logging is off. |
+| `HELM_LOG_ENDPOINT` | Full URL of Helm's `/api/v1/logs`. |
+| `HELM_ENVIRONMENT` | Environment label, e.g. `pr-142`, `staging`. |
+| `HELM_COMMIT_SHA` | Commit identifying the build (optional). |
+
+### Prod-gate
+
+Logging is gated twice. Helm never mints a token for production, so
+`init_from_env()` silently no-ops there. As a second line of defense, both
+`init_from_env()` and the explicit `init(...)` refuse to ship — and emit one
+warning — when `HELM_ENVIRONMENT` looks production-like (`prod`, `production`,
+`prod-*`, `production-*`).
+
+### Observability
+
+```python
+from django_helm.logging import metrics_snapshot
+print(metrics_snapshot())   # {'log_drops_total': N}
+```
+
+The log queue is bounded (default 10,000); under pressure it drops the oldest
+record and increments `log_drops_total`. Surface it as a Sentry breadcrumb or a
+debug endpoint to spot back-pressure.
+
 ## Analytics
 
 Ships passive per-request `ApiHit` records to Helm's analytics endpoints. One middleware, one daemon thread, zero database tables on your side.
