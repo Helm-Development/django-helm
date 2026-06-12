@@ -66,3 +66,11 @@ def test_reinit_into_prod_detaches_previous_handler():
     hlog.init(api_key='hlit_x', endpoint='https://h/api/v1/logs', environment='production')
     assert hlog._state.get('handler') is None
     assert handler not in root.handlers
+
+
+def test_token_without_endpoint_warns_and_noops(monkeypatch, caplog):
+    _set_env(monkeypatch, HELM_INGEST_TOKEN='hlit_x', HELM_ENVIRONMENT='pr-1')  # no HELM_LOG_ENDPOINT
+    with caplog.at_level(logging.WARNING):
+        hlog.init_from_env()
+    assert hlog._state.get('handler') is None
+    assert any('endpoint' in r.message.lower() for r in caplog.records)
