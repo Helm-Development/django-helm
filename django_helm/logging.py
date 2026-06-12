@@ -3,11 +3,20 @@
 import atexit
 import json
 import logging
+import os
 import queue as queue_module
 import threading
 import traceback
 
 import requests
+
+
+_PROD_ENV_NAMES = {'prod', 'production'}
+
+
+def _looks_prod(environment):
+    env = (environment or '').strip().lower()
+    return env in _PROD_ENV_NAMES or env.startswith('prod-') or env.startswith('production')
 
 
 # Python log level -> (OTel severity number, OTel severity text)
@@ -223,6 +232,13 @@ def init(api_key, endpoint, environment, commit_sha='', service_name='django',
     Attaches a handler to the root logger that ships logs to Helm's OTLP
     endpoint via a background thread.
     """
+    if _looks_prod(environment):
+        logging.getLogger(__name__).warning(
+            'Helm logging disabled: refusing to ship from a production-like '
+            'environment (%s). Use Sentry for production.', environment,
+        )
+        return
+
     # Tear down previous init if any
     if _state.get('handler'):
         logging.getLogger().removeHandler(_state['handler'])
@@ -256,3 +272,30 @@ def init(api_key, endpoint, environment, commit_sha='', service_name='django',
     _state['handler'] = handler
     _state['worker'] = worker
     _state['queue'] = log_queue
+
+
+def init_from_env():
+    """Initialize Helm logging from the HELM_* env vars Helm injects.
+
+    No-ops silently when HELM_INGEST_TOKEN is absent (the normal production
+    path -- no token is ever minted for prod). Warns and no-ops if the
+    environment looks production-like even when a token is present.
+    """
+    token = os.environ.get('HELM_INGEST_TOKEN')
+    if not token:
+        return  # no token minted: silent no-op (production path)
+
+    environment = os.environ.get('HELM_ENVIRONMENT', '')
+    endpoint = os.environ.get('HELM_LOG_ENDPOINT')
+    if not endpoint:
+        logging.getLogger(__name__).warning(
+            'Helm logging disabled: HELM_LOG_ENDPOINT is not set.',
+        )
+        return
+
+    init(
+        api_key=token,
+        endpoint=endpoint,
+        environment=environment,
+        commit_sha=os.environ.get('HELM_COMMIT_SHA', ''),
+    )

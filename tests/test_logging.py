@@ -369,14 +369,14 @@ class TestInit:
             init(
                 api_key='test-key',
                 endpoint='https://example.com/api/v1/logs',
-                environment='prod',
+                environment='staging',
                 service_name='celery-worker',
                 commit_sha='deadbeef',
             )
 
         worker = _state['worker']
         attr_dict = {a['key']: a['value']['stringValue'] for a in worker._resource_attrs}
-        assert attr_dict['helm.environment'] == 'prod'
+        assert attr_dict['helm.environment'] == 'staging'
         assert attr_dict['service.name'] == 'celery-worker'
         assert attr_dict['helm.commit.sha'] == 'deadbeef'
 
