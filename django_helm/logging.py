@@ -232,18 +232,20 @@ def init(api_key, endpoint, environment, commit_sha='', service_name='django',
     Attaches a handler to the root logger that ships logs to Helm's OTLP
     endpoint via a background thread.
     """
+    # Tear down any previous init FIRST, so a re-init into a prod-like env
+    # actually detaches a previously-attached handler before we abort on the gate.
+    if _state.get('handler'):
+        logging.getLogger().removeHandler(_state['handler'])
+    if _state.get('worker'):
+        _state['worker'].stop()
+    _state.clear()
+
     if _looks_prod(environment):
         logging.getLogger(__name__).warning(
             'Helm logging disabled: refusing to ship from a production-like '
             'environment (%s). Use Sentry for production.', environment,
         )
         return
-
-    # Tear down previous init if any
-    if _state.get('handler'):
-        logging.getLogger().removeHandler(_state['handler'])
-    if _state.get('worker'):
-        _state['worker'].stop()
 
     # Build resource attributes
     resource_attrs = _build_resource_attrs(environment, commit_sha, service_name)

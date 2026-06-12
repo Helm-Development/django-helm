@@ -35,11 +35,13 @@ def test_prod_like_env_warns_and_noops(monkeypatch, caplog):
     assert any('production' in r.message.lower() for r in caplog.records)
 
 
-def test_prod_prefixed_env_noops(monkeypatch):
+def test_prod_prefixed_env_noops(monkeypatch, caplog):
     _set_env(monkeypatch, HELM_INGEST_TOKEN='hlit_x',
              HELM_LOG_ENDPOINT='https://h/api/v1/logs', HELM_ENVIRONMENT='prod-eu')
-    hlog.init_from_env()
+    with caplog.at_level(logging.WARNING):
+        hlog.init_from_env()
     assert hlog._state.get('handler') is None
+    assert any('prod-eu' in r.message.lower() or 'production-like' in r.message.lower() for r in caplog.records)
 
 
 def test_valid_nonprod_attaches_handler(monkeypatch):
@@ -53,3 +55,14 @@ def test_valid_nonprod_attaches_handler(monkeypatch):
 def test_explicit_init_also_prod_gated(monkeypatch):
     hlog.init(api_key='hlit_x', endpoint='https://h/api/v1/logs', environment='production')
     assert hlog._state.get('handler') is None
+
+
+def test_reinit_into_prod_detaches_previous_handler():
+    root = logging.getLogger()
+    hlog.init(api_key='hlit_x', endpoint='https://h/api/v1/logs', environment='pr-1')
+    handler = hlog._state.get('handler')
+    assert handler is not None
+    assert handler in root.handlers
+    hlog.init(api_key='hlit_x', endpoint='https://h/api/v1/logs', environment='production')
+    assert hlog._state.get('handler') is None
+    assert handler not in root.handlers
