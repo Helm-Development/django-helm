@@ -1,8 +1,22 @@
 """Helm logging handler — ships Python logs to Helm's OTLP endpoint."""
 
+import atexit
+import json
 import logging
+import os
+import queue as queue_module
 import threading
 import traceback
+
+import requests
+
+
+_PROD_ENV_NAMES = {'prod', 'production'}
+
+
+def _looks_prod(environment):
+    env = (environment or '').strip().lower()
+    return env in _PROD_ENV_NAMES or env.startswith('prod-') or env.startswith('production')
 
 
 # Python log level -> (OTel severity number, OTel severity text)
@@ -15,6 +29,31 @@ _LEVEL_MAP = {
 }
 
 _LEVEL_THRESHOLDS = sorted(_LEVEL_MAP.keys())
+
+# Process-local drop metric. Named metrics_snapshot()/reset_metrics() rather than
+# the bare snapshot()/reset() used by analytics/metrics.py: these live at the top
+# level of the logging module (not a dedicated `metrics` submodule), so the longer
+# names stay unambiguous at the call site, e.g. hlog.metrics_snapshot().
+_metrics_lock = threading.Lock()
+_metrics = {'log_drops_total': 0}
+
+
+def _increment_drops(n=1):
+    with _metrics_lock:
+        _metrics['log_drops_total'] += n
+
+
+def metrics_snapshot():
+    """Return a copy of the log drop counters. Safe to mutate."""
+    with _metrics_lock:
+        return dict(_metrics)
+
+
+def reset_metrics():
+    """Zero all counters. Intended for tests."""
+    with _metrics_lock:
+        for k in _metrics:
+            _metrics[k] = 0
 
 
 def _map_level(level):
@@ -100,17 +139,23 @@ class HelmLogHandler(logging.Handler):
         self._guard.emitting = True
         try:
             otlp = _record_to_otlp(record)
-            self._queue.put_nowait(otlp)
+            try:
+                self._queue.put_nowait(otlp)
+            except queue_module.Full:
+                # Drop the oldest to make room for the newest, then count it.
+                try:
+                    self._queue.get_nowait()
+                except queue_module.Empty:
+                    pass
+                _increment_drops()
+                try:
+                    self._queue.put_nowait(otlp)
+                except queue_module.Full:
+                    _increment_drops()
         except Exception:
-            pass  # Silently drop — never disrupt the application
+            pass  # never disrupt the application
         finally:
             self._guard.emitting = False
-
-
-import json
-import queue as queue_module
-
-import requests
 
 
 class HelmBatchWorker(threading.Thread):
@@ -165,8 +210,6 @@ class HelmBatchWorker(threading.Thread):
             pass  # Silently drop — ephemeral logs
 
 
-import atexit
-
 # Module-level state for idempotent init
 _state = {}
 
@@ -183,23 +226,32 @@ def _build_resource_attrs(environment, commit_sha, service_name):
 
 
 def init(api_key, endpoint, environment, commit_sha='', service_name='django',
-         level='DEBUG', batch_size=50, flush_interval=5.0):
+         level='DEBUG', batch_size=50, flush_interval=5.0, queue_max=10_000):
     """Initialize Helm logging. Call once in settings.py.
 
     Attaches a handler to the root logger that ships logs to Helm's OTLP
     endpoint via a background thread.
     """
-    # Tear down previous init if any
+    # Tear down any previous init FIRST, so a re-init into a prod-like env
+    # actually detaches a previously-attached handler before we abort on the gate.
     if _state.get('handler'):
         logging.getLogger().removeHandler(_state['handler'])
     if _state.get('worker'):
         _state['worker'].stop()
+    _state.clear()
+
+    if _looks_prod(environment):
+        logging.getLogger(__name__).warning(
+            'Helm logging disabled: refusing to ship from a production-like '
+            'environment (%s). Use Sentry for production.', environment,
+        )
+        return
 
     # Build resource attributes
     resource_attrs = _build_resource_attrs(environment, commit_sha, service_name)
 
     # Create queue, handler, and worker
-    log_queue = queue_module.Queue()
+    log_queue = queue_module.Queue(maxsize=queue_max)
     log_level = getattr(logging, level.upper(), logging.DEBUG)
 
     handler = HelmLogHandler(log_queue, level=log_level)
@@ -222,3 +274,30 @@ def init(api_key, endpoint, environment, commit_sha='', service_name='django',
     _state['handler'] = handler
     _state['worker'] = worker
     _state['queue'] = log_queue
+
+
+def init_from_env():
+    """Initialize Helm logging from the HELM_* env vars Helm injects.
+
+    No-ops silently when HELM_INGEST_TOKEN is absent (the normal production
+    path -- no token is ever minted for prod). Warns and no-ops if the
+    environment looks production-like even when a token is present.
+    """
+    token = os.environ.get('HELM_INGEST_TOKEN')
+    if not token:
+        return  # no token minted: silent no-op (production path)
+
+    environment = os.environ.get('HELM_ENVIRONMENT', '')
+    endpoint = os.environ.get('HELM_LOG_ENDPOINT')
+    if not endpoint:
+        logging.getLogger(__name__).warning(
+            'Helm logging disabled: HELM_LOG_ENDPOINT is not set.',
+        )
+        return
+
+    init(
+        api_key=token,
+        endpoint=endpoint,
+        environment=environment,
+        commit_sha=os.environ.get('HELM_COMMIT_SHA', ''),
+    )
