@@ -226,16 +226,24 @@ def _build_resource_attrs(environment, commit_sha, service_name):
 
 
 def init(api_key, endpoint, environment, commit_sha='', service_name='django',
-         level='DEBUG', batch_size=50, flush_interval=5.0, queue_max=10_000):
+         level='DEBUG', batch_size=50, flush_interval=5.0, queue_max=10_000,
+         loggers=None):
     """Initialize Helm logging. Call once in settings.py.
 
     Attaches a handler to the root logger that ships logs to Helm's OTLP
     endpoint via a background thread.
+
+    Optionally attach the handler to additional named loggers (besides root)
+    via the ``loggers`` argument (a list of logger name strings).
     """
-    # Tear down any previous init FIRST, so a re-init into a prod-like env
-    # actually detaches a previously-attached handler before we abort on the gate.
+    # Tear down any previous init FIRST, so a re-init (incl. one that aborts on
+    # the prod-gate below) detaches the previously-attached handler from root
+    # and every named logger.
     if _state.get('handler'):
-        logging.getLogger().removeHandler(_state['handler'])
+        old = _state['handler']
+        logging.getLogger().removeHandler(old)
+        for name in _state.get('attached_loggers', []):
+            logging.getLogger(name).removeHandler(old)
     if _state.get('worker'):
         _state['worker'].stop()
     _state.clear()
@@ -263,8 +271,13 @@ def init(api_key, endpoint, environment, commit_sha='', service_name='django',
         flush_interval=flush_interval,
     )
 
-    # Attach handler and start worker
+    # Attach handler to root logger, then to any named loggers
     logging.getLogger().addHandler(handler)
+    attached = []
+    for name in (loggers or []):
+        logging.getLogger(name).addHandler(handler)
+        attached.append(name)
+
     worker.start()
 
     # Register atexit flush
@@ -274,14 +287,19 @@ def init(api_key, endpoint, environment, commit_sha='', service_name='django',
     _state['handler'] = handler
     _state['worker'] = worker
     _state['queue'] = log_queue
+    _state['attached_loggers'] = attached
 
 
-def init_from_env():
+def init_from_env(loggers=None):
     """Initialize Helm logging from the HELM_* env vars Helm injects.
 
     No-ops silently when HELM_INGEST_TOKEN is absent (the normal production
     path -- no token is ever minted for prod). Warns and no-ops if the
     environment looks production-like even when a token is present.
+
+    Optionally attach the handler to additional named loggers (besides root)
+    via the ``loggers`` arg or the comma-separated ``HELM_LOG_LOGGERS`` env var.
+    When both are provided the explicit ``loggers`` argument wins.
     """
     token = os.environ.get('HELM_INGEST_TOKEN')
     if not token:
@@ -295,9 +313,14 @@ def init_from_env():
         )
         return
 
+    if loggers is None:
+        raw = os.environ.get('HELM_LOG_LOGGERS', '')
+        loggers = [n.strip() for n in raw.split(',') if n.strip()] or None
+
     init(
         api_key=token,
         endpoint=endpoint,
         environment=environment,
         commit_sha=os.environ.get('HELM_COMMIT_SHA', ''),
+        loggers=loggers,
     )
