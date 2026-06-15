@@ -26,6 +26,22 @@ init_from_env()
 | `HELM_LOG_ENDPOINT` | Full URL of Helm's `/api/v1/logs`. |
 | `HELM_ENVIRONMENT` | Environment label, e.g. `pr-142`, `staging`. |
 | `HELM_COMMIT_SHA` | Commit identifying the build (optional). |
+| `HELM_LOG_LOGGERS` | Optional comma-separated logger names to attach to (see below). |
+
+### Capturing non-propagating loggers
+
+By default the handler attaches to the **root** logger. That misses any logger
+configured with `propagate: False` (a common Django pattern, e.g. a dedicated
+`apps.authentication` logger) — its records never reach root. Attach the handler
+directly to those loggers via the `loggers` argument (or the `HELM_LOG_LOGGERS`
+env var, comma-separated; the argument wins):
+
+```python
+init_from_env(loggers=['apps.authentication', 'apps.api', 'django'])
+```
+
+The same handler instance is attached to root plus each named logger, and is
+cleanly detached from all of them on re-init.
 
 ### Prod-gate
 
