@@ -252,8 +252,7 @@ def count_accounts(since):
     confirmed = User.objects.filter(email_confirmed_at__isnull=False)
     result = {'activated_users': confirmed.count()}
     result['not_activated_users'] = User.objects.count() - result['activated_users']
-    if since is not None:
-        result['activated_since'] = confirmed.filter(email_confirmed_at__gte=since).count()
+    result['activated_since'] = confirmed.filter(email_confirmed_at__gte=since).count()
     return result
 ```
 
@@ -268,7 +267,16 @@ HELM_ANALYTICS = {
 
 `/helm/analytics_exclusion_list` tells Helm which users to leave out of analytics, such as staff, testers, and demo accounts. Each entry carries the Helm `user_hash` and a reason.
 
-**Per-user flag.** Add the inline to your `UserAdmin`:
+**Per-user flag.** If you already have a `UserAdmin`, add the inline to it:
+
+```python
+from django_helm.analytics.admin import HelmUserAnalyticsInline
+
+# After your existing UserAdmin class (YourUserAdmin) is defined:
+YourUserAdmin.inlines = [*YourUserAdmin.inlines, HelmUserAnalyticsInline]
+```
+
+With Django's stock admin, re-register the user model with the inline:
 
 ```python
 from django.contrib import admin
@@ -292,9 +300,11 @@ The flag has three values:
 
 **Rules.** The `AnalyticsExclusionRule` admin is registered automatically. A rule has:
 
-- `pattern`: a regular expression, matched case-insensitively. It is checked with Python `re` and against your database when you save.
-- `field_path`: the user field to match. Defaults to `email`. Related fields work, for example `username` or `profile__company`.
+- `pattern`: a regular expression, matched case-insensitively. It is tested against your database when you save, so use your database's regex syntax.
+- `field_path`: the user field to match. Defaults to `email`. Related fields work, for example `profile__company`.
 - `enabled`: switch a rule off without deleting it.
+
+Helm reads at most 64 KB per response, roughly 900 exclusions, so keep rules targeted. Each reason is cut to 64 characters.
 
 Select rules in the list and run **Preview matches** to see the first 50 matching values before you rely on them.
 

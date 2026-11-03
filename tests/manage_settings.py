@@ -5,6 +5,8 @@ settings.configure(...) call from the upper-case names here, and
 `DJANGO_SETTINGS_MODULE=tests.manage_settings django-admin makemigrations`
 uses it directly, so the two never drift.
 """
+import os
+
 DEBUG = True
 DATABASES = {
     'default': {
@@ -12,6 +14,17 @@ DATABASES = {
         'NAME': ':memory:',
     },
 }
+# Run the suite on PostgreSQL with HELM_TEST_DB_ENGINE=postgresql plus
+# HELM_TEST_DB_NAME/USER/PASSWORD/HOST/PORT. Django creates test_<NAME>.
+if os.environ.get('HELM_TEST_DB_ENGINE') == 'postgresql':
+    DATABASES['default'] = {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.environ['HELM_TEST_DB_NAME'],
+        'USER': os.environ.get('HELM_TEST_DB_USER', ''),
+        'PASSWORD': os.environ.get('HELM_TEST_DB_PASSWORD', ''),
+        'HOST': os.environ.get('HELM_TEST_DB_HOST', ''),
+        'PORT': os.environ.get('HELM_TEST_DB_PORT', ''),
+    }
 INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.auth',

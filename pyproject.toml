@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 dependencies = ["requests"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-django", "requests", "django>=5.0,<6.0"]
+dev = ["pytest", "pytest-django", "requests", "django>=5.0,<6.0", "psycopg[binary]"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
