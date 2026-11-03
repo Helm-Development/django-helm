@@ -1,5 +1,3 @@
-import re
-
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldDoesNotExist, FieldError, ValidationError
@@ -82,7 +80,7 @@ class AnalyticsExclusionRule(models.Model):
         return f'{self.field_path} ~* {self.pattern}'
 
     def matching_users(self):
-        return get_user_model().objects.filter(**{f'{self.field_path}__iregex': self.pattern})
+        return get_user_model()._default_manager.filter(**{f'{self.field_path}__iregex': self.pattern})
 
     def clean(self):
         super().clean()
@@ -94,7 +92,7 @@ class AnalyticsExclusionRule(models.Model):
         if error:
             raise ValidationError({'field_path': error})
         try:
-            get_user_model().objects.filter(**{f'{self.field_path}__regex': '.'})
+            get_user_model()._default_manager.filter(**{f'{self.field_path}__regex': '.'})
         except FieldError as exc:
             raise ValidationError({'field_path': str(exc)})
 
@@ -116,11 +114,8 @@ class AnalyticsExclusionRule(models.Model):
         return None
 
     def _check_pattern(self):
-        try:
-            re.compile(self.pattern)
-        except re.error as exc:
-            raise ValidationError({'pattern': f'Invalid regular expression: {exc}'})
-        # Row-independent probe: the engine compiles the regex even with no
+        # The database is the only judge of the pattern: the regex that is
+        # tested here is the regex that runs. Row-independent probe: the engine compiles the regex even with no
         # table rows. Savepoint so a rejected statement does not poison the
         # caller's transaction. 'iregex' is the lookup matching_users() runs.
         try:

@@ -71,6 +71,7 @@ def test_clean_rejects_bad_regex():
     with pytest.raises(ValidationError) as exc:
         AnalyticsExclusionRule(pattern='(unclosed').full_clean()
     assert 'pattern' in exc.value.message_dict
+    assert 'database rejected' in exc.value.message_dict['pattern'][0]
 
 
 def test_clean_rejects_unknown_field_path():
@@ -105,18 +106,21 @@ def test_clean_accepts_relation_path():
 
 
 def test_clean_survives_db_rejection_inside_transaction():
-    """The database probe rejects bad patterns even with no user rows.
+    """The database probe is the only pattern check and rejects bad patterns even with no rows.
 
-    On SQLite the regex engine is Python ``re``, so the Python check always
-    rejects first; patch it out so the database path is what raises. On
-    PostgreSQL the database check is the only thing standing between an admin
-    and a runtime error. Savepoint behaviour (the outer transaction staying
-    usable after a rejected statement) is only observable on PostgreSQL; here
-    we assert the connection still works.
+    Python ``re`` is deliberately not consulted: PostgreSQL accepts syntax it
+    rejects (``\\m``) and reads ``\\b`` differently. Savepoint behaviour (the
+    outer transaction staying usable after a rejected statement) is only
+    observable on PostgreSQL; here we assert the connection still works.
     """
     assert User.objects.count() == 0
-    with mock.patch('django_helm.analytics.models.re.compile', return_value=object()):
-        with pytest.raises(ValidationError) as exc:
-            AnalyticsExclusionRule(pattern='(unclosed').full_clean()
+    with pytest.raises(ValidationError) as exc:
+        AnalyticsExclusionRule(pattern='(unclosed').full_clean()
     assert 'database rejected' in exc.value.message_dict['pattern'][0]
     assert User.objects.count() == 0
+
+
+def test_clean_does_not_use_python_re_precheck():
+    with mock.patch('django_helm.analytics.models.re', create=True) as fake_re:
+        fake_re.compile.side_effect = AssertionError('python re consulted')
+        AnalyticsExclusionRule(pattern='^ok').full_clean()

@@ -1,4 +1,7 @@
+from unittest import mock
+
 import pytest
+from django.db import DatabaseError
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.test import Client
@@ -60,3 +63,41 @@ def test_preview_action_works_for_disabled_rule():
     resp = c.post(url, {'action': 'preview_matches', '_selected_action': [r.pk]})
     assert resp.status_code == 200
     assert 'a@acme.com' in resp.content.decode()
+
+
+def test_matches_counts_distinct_users_over_multivalued_path():
+    from django.contrib.auth.models import Group
+    u = User.objects.create_user('a', 'a@x.com', 'p')
+    u.groups.add(Group.objects.create(name='team-one'), Group.objects.create(name='team-two'))
+    r = AnalyticsExclusionRule.objects.create(pattern='^team', field_path='groups__name')
+    assert AnalyticsExclusionRuleAdmin(AnalyticsExclusionRule, admin.site).matches(r) == 1
+
+
+def test_preview_total_counts_distinct_users():
+    from django.contrib.auth.models import Group
+    su = User.objects.create_superuser('root', 'root@x.com', 'p')
+    u = User.objects.create_user('a', 'a@x.com', 'p')
+    u.groups.add(Group.objects.create(name='team-one'), Group.objects.create(name='team-two'))
+    r = AnalyticsExclusionRule.objects.create(pattern='^team', field_path='groups__name')
+    c = Client()
+    c.force_login(su)
+    url = reverse('admin:django_helm_analytics_analyticsexclusionrule_changelist')
+    html = c.post(url, {'action': 'preview_matches', '_selected_action': [r.pk]}).content.decode()
+    assert '1 matching user (' in html
+
+
+def test_matches_returns_error_string_on_database_rejection():
+    r = AnalyticsExclusionRule.objects.create(pattern='x')
+    ma = AnalyticsExclusionRuleAdmin(AnalyticsExclusionRule, admin.site)
+    with mock.patch.object(AnalyticsExclusionRule, 'matching_users', side_effect=DatabaseError('bad')):
+        assert ma.matches(r) == 'error'
+
+
+def test_preview_back_link_goes_to_rule_changelist():
+    su = User.objects.create_superuser('root', 'root@x.com', 'p')
+    r = AnalyticsExclusionRule.objects.create(pattern='x')
+    c = Client()
+    c.force_login(su)
+    url = reverse('admin:django_helm_analytics_analyticsexclusionrule_changelist')
+    html = c.post(url, {'action': 'preview_matches', '_selected_action': [r.pk]}).content.decode()
+    assert f'<a href="{url}">Back to rules</a>' in html

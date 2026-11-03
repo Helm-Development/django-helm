@@ -10,12 +10,17 @@ a per-user inclusion override and note::
 
 The exclusion rule admin registers itself automatically.
 """
+import logging
+
 from django.contrib import admin
+from django.db import Error as DatabaseError
 from django.template.response import TemplateResponse
 
 from .models import AnalyticsExclusionRule, HelmUserAnalytics
 
 PREVIEW_LIMIT = 50
+
+logger = logging.getLogger('django_helm.analytics')
 
 
 class HelmUserAnalyticsInline(admin.StackedInline):
@@ -33,14 +38,18 @@ class AnalyticsExclusionRuleAdmin(admin.ModelAdmin):
     actions = ['preview_matches']
 
     @admin.display(description='Matches')
-    def matches(self, obj) -> int:
-        return obj.matching_users().count()
+    def matches(self, obj):
+        try:
+            return obj.matching_users().distinct().count()
+        except DatabaseError:
+            logger.warning('helm analytics: rule %s pattern rejected by database', obj.pk, exc_info=True)
+            return 'error'
 
     @admin.action(description='Preview matches')
     def preview_matches(self, request, queryset):
         previews = []
         for rule in queryset:
-            users = rule.matching_users()
+            users = rule.matching_users().distinct()
             previews.append({
                 'rule': rule,
                 'total': users.count(),

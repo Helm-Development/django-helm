@@ -7,5 +7,5 @@
 {% for v in p.values %}<li>{{ v }}</li>
 {% endfor %}</ul>
 {% endfor %}
-<p><a href="../">Back to rules</a></p>
+<p><a href="{% url 'admin:django_helm_analytics_analyticsexclusionrule_changelist' %}">Back to rules</a></p>
 {% endblock %}

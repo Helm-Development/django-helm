@@ -73,3 +73,9 @@ def test_hashes_are_sorted_and_match_middleware_derivation():
     out = excluded_user_hashes()
     assert [o['user_hash'] for o in out] == sorted(_h(u) for u in users)
     assert all(o['reason'] == 'rule:n' for o in out)
+
+
+def test_reason_is_truncated_to_64_chars():
+    a = _u('a', 'a@acme.com')
+    AnalyticsExclusionRule.objects.create(pattern='@acme\\.com$', note='n' * 200)
+    assert excluded_users() == {a.pk: ('rule:' + 'n' * 200)[:64]}
