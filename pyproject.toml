@@ -11,3 +11,6 @@ dev = ["pytest", "pytest-django", "requests", "django>=5.0,<6.0"]
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+django_helm = ["analytics/templates/django_helm/*.html"]

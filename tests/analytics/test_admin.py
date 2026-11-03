@@ -48,3 +48,15 @@ def test_preview_action_lists_values():
     assert resp.status_code == 200
     assert 'u0@acme.com' in html and '60' in html
     assert html.count('@acme.com') == 50
+
+
+def test_preview_action_works_for_disabled_rule():
+    su = User.objects.create_superuser('root', 'root@x.com', 'p')
+    User.objects.create_user('a', 'a@acme.com', 'p')
+    r = AnalyticsExclusionRule.objects.create(pattern='@acme\\.com$', enabled=False)
+    c = Client()
+    c.force_login(su)
+    url = reverse('admin:django_helm_analytics_analyticsexclusionrule_changelist')
+    resp = c.post(url, {'action': 'preview_matches', '_selected_action': [r.pk]})
+    assert resp.status_code == 200
+    assert 'a@acme.com' in resp.content.decode()
