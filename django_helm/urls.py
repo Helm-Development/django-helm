@@ -16,6 +16,7 @@ from django_helm.analytics import views
 
 VIEWS = [
     ('analytics_exclusion_list', views.exclusion_list),
+    ('user_accounts', views.user_accounts),
 ]
 
 

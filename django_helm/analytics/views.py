@@ -5,6 +5,7 @@ from django.utils import timezone
 from django_helm.endpoints import helm_endpoint
 
 from .exclusions import excluded_user_hashes
+from .user_accounts import counts, parse_since
 
 
 @helm_endpoint('analytics_exclusion_list')
@@ -16,3 +17,8 @@ def exclusion_list(request, body):
         'count': len(rows),
         'exclusions': rows,
     }
+
+
+@helm_endpoint('user_accounts')
+def user_accounts(request, body):
+    return counts(parse_since(body.get('since')))
