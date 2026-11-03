@@ -21,6 +21,7 @@ _DEFAULT_DENY = [
     r"^/favicon\.ico$",
     r"^/static/",
     r"^/media/",
+    r"^/helm/",
 ]
 
 _logger = logging.getLogger('django_helm.analytics')

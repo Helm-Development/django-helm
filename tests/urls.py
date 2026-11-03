@@ -1,1 +1,3 @@
-urlpatterns = []  # Task 6 switches this to include django_helm.urls
+from django.urls import include, path
+
+urlpatterns = [path('', include('django_helm.urls'))]

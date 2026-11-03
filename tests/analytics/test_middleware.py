@@ -69,6 +69,13 @@ class TestDenyList:
         mw(request)
         assert not captured_enqueues.called
 
+    def test_helm_endpoints_are_denied_by_default(self, rf, captured_enqueues):
+        from django_helm.analytics.middleware import ApiHitMiddleware
+        mw = ApiHitMiddleware(lambda req: _make_response())
+        request = rf.post('/helm/analytics_exclusion_list')
+        request.user = MagicMock(is_authenticated=False)
+        assert mw._should_skip(request) is True
+
 
 class TestOptOut:
     def test_dnt_header_skips_recording(self, rf, captured_enqueues):
