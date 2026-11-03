@@ -1,0 +1,11 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+{% for p in previews %}
+<h2>{{ p.rule.pattern }}</h2>
+<p>{{ p.total }} matching user{{ p.total|pluralize }} (showing up to {{ limit }}).</p>
+<ul>
+{% for v in p.values %}<li>{{ v }}</li>
+{% endfor %}</ul>
+{% endfor %}
+<p><a href="../">Back to rules</a></p>
+{% endblock %}
