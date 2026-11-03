@@ -2,7 +2,7 @@ import json
 import pytest
 from django.test import RequestFactory
 
-from django_helm.endpoints import helm_endpoint, presented_key
+from django_helm.endpoints import BadRequest, helm_endpoint, presented_key
 
 rf = RequestFactory()
 
@@ -10,7 +10,9 @@ rf = RequestFactory()
 @helm_endpoint('ping')
 def ping(request, body):
     if body.get('boom'):
-        raise ValueError('boom requested')
+        raise BadRequest('boom requested')
+    if body.get('valerr'):
+        raise ValueError('internal detail')
     return {'ok': True, 'extra': body.get('extra')}
 
 
@@ -79,7 +81,7 @@ def test_wrong_project_is_400():
     assert resp['Cache-Control'] == 'no-store'
 
 
-def test_value_error_from_view_is_400():
+def test_bad_request_from_view_is_400():
     resp = ping(_post({**GOOD, 'boom': True}))
     assert resp.status_code == 400 and json.loads(resp.content) == {'error': 'boom requested'}
     assert resp['Cache-Control'] == 'no-store'
@@ -96,3 +98,23 @@ def test_bearer_wins_over_header():
 
 def test_presented_key_none_when_absent():
     assert presented_key(rf.post('/x')) is None
+
+
+def test_value_error_from_view_propagates():
+    with pytest.raises(ValueError, match='internal detail'):
+        ping(_post({**GOOD, 'valerr': True}))
+
+
+def test_get_with_key_unset_is_404(settings):
+    settings.HELM_ANALYTICS = {**settings.HELM_ANALYTICS, 'api_key': ''}
+    resp = ping(rf.get('/helm/ping'))
+    assert resp.status_code == 404 and resp.content == b''
+    assert resp['Cache-Control'] == 'no-store'
+
+
+def test_view_is_login_not_required():
+    try:
+        from django.contrib.auth.decorators import login_not_required  # noqa: F401
+    except ImportError:
+        pytest.skip('Django < 5.1')
+    assert getattr(ping, 'login_required', None) is False

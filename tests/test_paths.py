@@ -24,3 +24,13 @@ def test_resolve_unknown_name_raises():
     import pytest
     with pytest.raises(KeyError):
         paths.resolve('nope')
+
+
+def test_resolve_normalizes_slashless_override(settings):
+    settings.HELM_ANALYTICS = {**settings.HELM_ANALYTICS, 'paths': {'analytics_exclusion_list': 'internal/exclusions'}}
+    assert paths.resolve('analytics_exclusion_list') == '/internal/exclusions'
+
+
+def test_resolve_with_paths_none_uses_defaults(settings):
+    settings.HELM_ANALYTICS = {**settings.HELM_ANALYTICS, 'paths': None}
+    assert paths.resolve('user_accounts') == '/helm/user_accounts'

@@ -22,4 +22,5 @@ def resolve(name: str) -> str:
     Raises KeyError for an unknown name.
     """
     default = DEFAULTS[name]
-    return settings.HELM_ANALYTICS.get('paths', {}).get(name) or default
+    value = (settings.HELM_ANALYTICS.get('paths') or {}).get(name) or default
+    return '/' + value.lstrip('/')

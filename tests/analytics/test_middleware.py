@@ -272,3 +272,19 @@ class TestAllowPaths:
             request.user = MagicMock(is_authenticated=False)
             mw(request)
             assert not captured_enqueues.called
+
+
+class TestHelmPathsDenied:
+    def _mw(self, paths_override):
+        from django.conf import settings
+        from django_helm.analytics.middleware import ApiHitMiddleware
+        with override_settings(HELM_ANALYTICS={**settings.HELM_ANALYTICS, 'paths': paths_override}):
+            return ApiHitMiddleware(lambda req: _make_response())
+
+    def test_slashless_override_is_skipped(self, rf):
+        mw = self._mw({'analytics_exclusion_list': 'internal/exclusions'})
+        assert mw._should_skip(rf.post('/internal/exclusions')) is True
+
+    def test_paths_none_does_not_crash_and_skips_defaults(self, rf):
+        mw = self._mw(None)
+        assert mw._should_skip(rf.post('/helm/user_accounts')) is True
