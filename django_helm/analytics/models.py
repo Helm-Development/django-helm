@@ -1,5 +1,10 @@
+import re
+
 from django.conf import settings
-from django.db import models
+from django.contrib.auth import get_user_model
+from django.core.exceptions import FieldDoesNotExist, FieldError, ValidationError
+from django.db import Error as DatabaseError
+from django.db import models, transaction
 
 INCLUDE_DEFAULT = 'default'
 INCLUDE_ALWAYS = 'include'
@@ -45,3 +50,80 @@ class HelmUserAnalytics(models.Model):
 
     def __str__(self):
         return f'{self.user_id}: {self.inclusion}'
+
+
+class AnalyticsExclusionRule(models.Model):
+    """Regex rule that excludes matching users from Helm analytics."""
+
+    TEXT_FIELD_TYPES = (models.CharField, models.TextField)
+
+    pattern = models.CharField(
+        max_length=255,
+        help_text=(
+            "Case-insensitive regular expression in your database's syntax. "
+            'Tested against the database when you save.'
+        ),
+    )
+    field_path = models.CharField(
+        max_length=128,
+        default='email',
+        help_text='Django lookup path on your user model, e.g. email, username, profile__company.',
+    )
+    enabled = models.BooleanField(default=True)
+    note = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'django_helm_exclusion_rule'
+        ordering = ['id']
+
+    def __str__(self):
+        return f'{self.field_path} ~* {self.pattern}'
+
+    def matching_users(self):
+        return get_user_model().objects.filter(**{f'{self.field_path}__iregex': self.pattern})
+
+    def clean(self):
+        super().clean()
+        self._check_field_path()
+        self._check_pattern()
+
+    def _check_field_path(self):
+        error = self._field_path_error()
+        if error:
+            raise ValidationError({'field_path': error})
+        try:
+            get_user_model().objects.filter(**{f'{self.field_path}__regex': '.'})
+        except FieldError as exc:
+            raise ValidationError({'field_path': str(exc)})
+
+    def _field_path_error(self):
+        """Walk the path through the user model; return a message or None."""
+        model = get_user_model()
+        segments = self.field_path.split('__')
+        for i, name in enumerate(segments):
+            try:
+                field = model._meta.get_field(name)
+            except FieldDoesNotExist:
+                return f"'{name}' is not a field on {model.__name__}."
+            if i < len(segments) - 1:
+                model = field.related_model
+                if model is None:
+                    return f"'{name}' is not a relation, so '__' cannot follow it."
+        if not isinstance(field, self.TEXT_FIELD_TYPES):
+            return f"'{self.field_path}' is not a text field, so a regular expression cannot match it."
+        return None
+
+    def _check_pattern(self):
+        try:
+            re.compile(self.pattern)
+        except re.error as exc:
+            raise ValidationError({'pattern': f'Invalid regular expression: {exc}'})
+        # Savepoint: a statement the database rejects must not poison the
+        # caller's transaction.
+        try:
+            with transaction.atomic():
+                get_user_model().objects.filter(**{f'{self.field_path}__regex': self.pattern}).exists()
+        except DatabaseError as exc:
+            raise ValidationError({'pattern': f"Your database rejected this pattern: {exc}"})
