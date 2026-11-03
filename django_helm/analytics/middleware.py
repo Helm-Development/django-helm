@@ -9,6 +9,8 @@ import time
 
 from django.conf import settings
 
+from django_helm import paths
+
 from .batcher import enqueue
 from .user_hash import derive_user_hash
 
@@ -21,6 +23,7 @@ _DEFAULT_DENY = [
     r"^/favicon\.ico$",
     r"^/static/",
     r"^/media/",
+    r"^/helm/",
 ]
 
 _logger = logging.getLogger('django_helm.analytics')
@@ -35,7 +38,9 @@ class ApiHitMiddleware:
         self.get_response = get_response
         cfg = settings.HELM_ANALYTICS
         custom_deny = cfg.get('deny_paths') or []
-        all_deny = _DEFAULT_DENY + list(custom_deny)
+        # Helm's own polling must never be recorded, even at an overridden path.
+        helm_paths = ['^' + re.escape(paths.resolve(n)) + '$' for n in paths.DEFAULTS]
+        all_deny = _DEFAULT_DENY + helm_paths + list(custom_deny)
         self._deny_patterns = [re.compile(p) for p in all_deny]
         allow = cfg.get('allow_paths')
         self._allow_patterns = [re.compile(p) for p in allow] if allow else None

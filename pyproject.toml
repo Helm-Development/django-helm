@@ -1,13 +1,16 @@
 [project]
 name = "django-helm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Django integration for Helm — logging, attribution, and more"
 requires-python = ">=3.10"
 dependencies = ["requests"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-django", "requests", "django>=5.0,<6.0"]
+dev = ["pytest", "pytest-django", "requests", "django>=5.0,<6.0", "psycopg[binary]"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+django_helm = ["analytics/templates/django_helm/*.html"]

@@ -6,10 +6,14 @@ Public surface:
 - derive_user_hash — hash helper for login responses and similar
 - metrics — process-local counters
 """
+import logging
+
 from . import metrics
 from .middleware import ApiHitMiddleware
 from .user_hash import derive_user_hash
 
+
+_logger = logging.getLogger('django_helm.analytics')
 
 REQUIRED_KEYS = ('project', 'sas_token', 'api_base_url', 'user_hash_salt')
 
@@ -29,6 +33,10 @@ def init() -> None:
     if missing:
         raise RuntimeError(
             f"HELM_ANALYTICS missing required keys: {', '.join(missing)}"
+        )
+    if 'django_helm.analytics' in settings.INSTALLED_APPS and not cfg.get('api_key'):
+        _logger.warning(
+            'HELM_ANALYTICS["api_key"] is empty; every django_helm endpoint will answer 404 until it is set'
         )
 
 

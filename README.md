@@ -153,3 +153,163 @@ print(metrics.snapshot())   # {'analytics_drops_total': N}
 ```
 
 Useful as a Sentry breadcrumb or a debug endpoint to spot queue pressure.
+
+## Backend endpoints for Helm
+
+Helm can ask your backend two questions: how many user accounts you have, and which users to leave out of analytics. This section adds both as endpoints in your Django project.
+
+### Install
+
+Add the app and run its migrations:
+
+```python
+INSTALLED_APPS = [
+    # ...
+    'django_helm.analytics',
+]
+```
+
+```bash
+python manage.py migrate
+```
+
+This creates two tables, `django_helm_user_analytics` and `django_helm_exclusion_rule`.
+
+### URLs
+
+Include the SDK's URLs once in your root `urls.py`:
+
+```python
+from django.urls import include, path
+
+urlpatterns = [
+    # ...
+    path('', include('django_helm.urls')),
+]
+```
+
+### API key
+
+In Helm, open your project settings, go to the **Backend SDK** tab, and press **Generate**. Copy the `hwk_` key into your settings:
+
+```python
+HELM_ANALYTICS = {
+    # ... existing keys
+    'api_key': config('HELM_API_KEY'),
+}
+```
+
+While `api_key` is empty, every endpoint answers 404 and `init()` logs a warning.
+
+### Default paths
+
+| Endpoint | Default path |
+|---|---|
+| User accounts | `/helm/user_accounts` |
+| Analytics exclusion list | `/helm/analytics_exclusion_list` |
+
+These match the placeholders in Helm's Backend SDK tab. Leave them alone unless you must move them.
+
+### Overriding a path
+
+To serve an endpoint elsewhere, set `'paths'` and enter the same path in Helm:
+
+```python
+HELM_ANALYTICS = {
+    # ... existing keys
+    'paths': {
+        'user_accounts': '/api/internal/helm/accounts',
+        'analytics_exclusion_list': '/api/internal/helm/exclusions',
+    },
+}
+```
+
+Keys you leave out keep their default path.
+
+### The `/helm/` deny default
+
+The middleware never records `ApiHit` rows for paths that start with `/helm/`, nor for the resolved endpoint paths. If you override a path to one under your own API, that path stops being recorded too.
+
+### User accounts endpoint
+
+`/helm/user_accounts` returns ten integer counts:
+
+- `total_users`, `active_users`, `inactive_users`
+- `activated_users`, `not_activated_users`
+- `created_since`, `logged_in_since`, `activated_since`
+- `staff_users`, `analytics_excluded_users`
+
+By default, active means `is_active`. Activated means `last_login` is set. The `*_since` counts use `date_joined` and `last_login`.
+
+If your product defines these differently, point `user_accounts_counter` at a callable. It receives `since` and returns a dict with any subset of the fields. Values must be non-negative integers; fields you omit keep the defaults.
+
+```python
+# myapp/helm.py
+from django.contrib.auth import get_user_model
+
+def count_accounts(since):
+    User = get_user_model()
+    confirmed = User.objects.filter(email_confirmed_at__isnull=False)
+    result = {'activated_users': confirmed.count()}
+    result['not_activated_users'] = User.objects.count() - result['activated_users']
+    result['activated_since'] = confirmed.filter(email_confirmed_at__gte=since).count()
+    return result
+```
+
+```python
+HELM_ANALYTICS = {
+    # ... existing keys
+    'user_accounts_counter': 'myapp.helm.count_accounts',
+}
+```
+
+### Analytics exclusion list endpoint
+
+`/helm/analytics_exclusion_list` tells Helm which users to leave out of analytics, such as staff, testers, and demo accounts. Each entry carries the Helm `user_hash` and a reason.
+
+**Per-user flag.** If you already have a `UserAdmin`, add the inline to it:
+
+```python
+from django_helm.analytics.admin import HelmUserAnalyticsInline
+
+# After your existing UserAdmin class (YourUserAdmin) is defined:
+YourUserAdmin.inlines = [*YourUserAdmin.inlines, HelmUserAnalyticsInline]
+```
+
+With Django's stock admin, re-register the user model with the inline:
+
+```python
+from django.contrib import admin
+from django.contrib.auth import get_user_model
+from django.contrib.auth.admin import UserAdmin
+from django_helm.analytics.admin import HelmUserAnalyticsInline
+
+User = get_user_model()
+admin.site.unregister(User)
+
+@admin.register(User)
+class MyUserAdmin(UserAdmin):
+    inlines = [*UserAdmin.inlines, HelmUserAnalyticsInline]
+```
+
+The flag has three values:
+
+- `Default (rules decide)`: exclusion rules apply.
+- `Always include`: the user is counted, even if a rule matches.
+- `Always exclude`: the user is left out, whatever the rules say.
+
+**Rules.** The `AnalyticsExclusionRule` admin is registered automatically. A rule has:
+
+- `pattern`: a regular expression, matched case-insensitively. It is tested against your database when you save, so use your database's regex syntax.
+- `field_path`: the user field to match. Defaults to `email`. Related fields work, for example `profile__company`.
+- `enabled`: switch a rule off without deleting it.
+
+Helm reads at most 64 KB per response, roughly 900 exclusions, so keep rules targeted. Each reason is cut to 64 characters.
+
+Select rules in the list and run **Preview matches** to see the first 50 matching values before you rely on them.
+
+`HELM_ANALYTICS['models']` is reserved for future tables that reference non-user entities. Leave it unset.
+
+### `hashed_id` is not the Helm hash
+
+If your backend already exposes a `hashed_id` (TastySpread does), do not send it as the Helm hash. The Helm hash is `derive_user_hash(project_slug, user.pk, salt)`, with the salt from `HELM_USER_HASH_SALT`. The exclusion list uses that value.
