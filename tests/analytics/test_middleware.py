@@ -76,6 +76,18 @@ class TestDenyList:
         request.user = MagicMock(is_authenticated=False)
         assert mw._should_skip(request) is True
 
+    def test_overridden_helm_path_is_denied(self, rf, captured_enqueues, settings):
+        from django_helm.analytics.middleware import ApiHitMiddleware
+        settings.HELM_ANALYTICS = {
+            **settings.HELM_ANALYTICS,
+            'paths': {'analytics_exclusion_list': '/internal/exclusions'},
+        }
+        mw = ApiHitMiddleware(lambda req: _make_response())
+        for path in ('/internal/exclusions', '/helm/analytics_exclusion_list'):
+            request = rf.post(path)
+            request.user = MagicMock(is_authenticated=False)
+            assert mw._should_skip(request) is True
+
 
 class TestOptOut:
     def test_dnt_header_skips_recording(self, rf, captured_enqueues):

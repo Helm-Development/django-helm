@@ -11,6 +11,5 @@ def test_override_changes_registered_path(settings):
         **settings.HELM_ANALYTICS,
         'paths': {'analytics_exclusion_list': '/custom/list'},
     }
-    [pattern] = build_urlpatterns()
+    [pattern] = [p for p in build_urlpatterns() if p.name == 'helm_analytics_exclusion_list']
     assert str(pattern.pattern) == 'custom/list'
-    assert pattern.name == 'helm_analytics_exclusion_list'
