@@ -4,7 +4,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldDoesNotExist, FieldError, ValidationError
 from django.db import Error as DatabaseError
-from django.db import models, transaction
+from django.db import connection, models, transaction
 
 INCLUDE_DEFAULT = 'default'
 INCLUDE_ALWAYS = 'include'
@@ -120,10 +120,19 @@ class AnalyticsExclusionRule(models.Model):
             re.compile(self.pattern)
         except re.error as exc:
             raise ValidationError({'pattern': f'Invalid regular expression: {exc}'})
-        # Savepoint: a statement the database rejects must not poison the
-        # caller's transaction.
+        # Row-independent probe: the engine compiles the regex even with no
+        # table rows. Savepoint so a rejected statement does not poison the
+        # caller's transaction. 'iregex' is the lookup matching_users() runs.
         try:
-            with transaction.atomic():
-                get_user_model().objects.filter(**{f'{self.field_path}__regex': self.pattern}).exists()
+            with transaction.atomic(), connection.cursor() as cursor:
+                cursor.execute(f'SELECT {self._iregex_sql()}', ['x', self.pattern])
         except DatabaseError as exc:
             raise ValidationError({'pattern': f"Your database rejected this pattern: {exc}"})
+
+    @staticmethod
+    def _iregex_sql():
+        """SQL for ``%s <iregex> %s`` as the ORM builds it for this vendor."""
+        operator = connection.operators.get('iregex')
+        if operator is None:  # vendors such as Oracle expose regex_lookup() instead
+            return connection.ops.regex_lookup('iregex')
+        return f"{connection.ops.lookup_cast('iregex', 'CharField')} {operator}"

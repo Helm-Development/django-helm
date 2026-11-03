@@ -1,8 +1,11 @@
-import pytest
-from django.contrib.auth import get_user_model
-from django.apps import apps
+from unittest import mock
 
-from django_helm.analytics.models import HelmUserAnalytics
+import pytest
+from django.apps import apps
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
+
+from django_helm.analytics.models import AnalyticsExclusionRule, HelmUserAnalytics
 
 pytestmark = pytest.mark.django_db
 User = get_user_model()
@@ -36,11 +39,6 @@ def test_every_sdk_table_is_prefixed():
 
 
 # --- AnalyticsExclusionRule ---------------------------------------------------
-from unittest import mock
-
-from django.core.exceptions import ValidationError
-
-from django_helm.analytics.models import AnalyticsExclusionRule
 
 
 def test_rule_defaults_and_table():
@@ -107,18 +105,18 @@ def test_clean_accepts_relation_path():
 
 
 def test_clean_survives_db_rejection_inside_transaction():
-    """The database check is what catches engine-specific bad patterns.
+    """The database probe rejects bad patterns even with no user rows.
 
     On SQLite the regex engine is Python ``re``, so the Python check always
-    rejects first. Patch it out to force the statement to reach the database.
-    On PostgreSQL the database check is the only thing standing between an
-    admin and a runtime error, and a rejected statement must not poison the
-    surrounding transaction. A user row must exist, because the engine only
-    evaluates the regex against rows it actually scans.
+    rejects first; patch it out so the database path is what raises. On
+    PostgreSQL the database check is the only thing standing between an admin
+    and a runtime error. Savepoint behaviour (the outer transaction staying
+    usable after a rejected statement) is only observable on PostgreSQL; here
+    we assert the connection still works.
     """
-    User.objects.create_user('a', 'a@x.com', 'p')
+    assert User.objects.count() == 0
     with mock.patch('django_helm.analytics.models.re.compile', return_value=object()):
         with pytest.raises(ValidationError) as exc:
             AnalyticsExclusionRule(pattern='(unclosed').full_clean()
-    assert 'pattern' in exc.value.message_dict
-    assert User.objects.count() == 1
+    assert 'database rejected' in exc.value.message_dict['pattern'][0]
+    assert User.objects.count() == 0
