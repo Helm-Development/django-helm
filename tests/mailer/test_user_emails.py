@@ -1,5 +1,8 @@
+import json
 from datetime import datetime, timedelta, timezone as tz
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django_helm.mailer import user_emails as ue
@@ -59,12 +62,12 @@ def test_ties_are_kept_together_and_cursor_advances():
     assert [a['email'] for a in out2['accounts']] == ['late@x.com'] and out2['has_more'] is False
 
 def test_changes_page_cut_sets_next_since_to_min_over_cut_lists():
-    for i in range(101):
+    for i in range(76):
         UserEmailEvent.objects.create(kind='email_changed', previous_email=f'o{i}@x.com', email=f'n{i}@x.com', occurred_at=T0 + timedelta(minutes=i))
     _joined('acct@x.com', T0 + timedelta(hours=10))
     out = ue.collect(T0, T1)
-    assert len(out['email_changes']) == 100 and out['has_more'] is True
-    assert out['next_since'] == T0 + timedelta(minutes=99, microseconds=1)
+    assert len(out['email_changes']) == 75 and out['has_more'] is True
+    assert out['next_since'] == T0 + timedelta(minutes=74, microseconds=1)
     assert [a['email'] for a in out['accounts']] == ['acct@x.com']  # the uncut list is returned in full
 
 def test_purge_old_events():
@@ -75,3 +78,86 @@ def test_purge_old_events():
 @pytest.mark.parametrize('email,ok', [('a@x.com', True), ('', False), ('nope', False), ('a@b.local', False), ('a@b.LOCALHOST', False), ('a@privaterelay.appleid.com', True)])
 def test_is_reportable(email, ok):
     assert ue.is_reportable(email) is ok
+
+
+def test_page_sizes():
+    assert (ue.ACCOUNTS_PAGE, ue.CHANGES_PAGE, ue.PAGE_BYTES) == (150, 75, 56 * 1024)
+
+
+def test_both_lists_cut_next_since_is_the_earlier_cut():
+    User.objects.bulk_create([User(username=f'a{i}', email=f'a{i}@x.com', date_joined=T0 + timedelta(minutes=i), is_active=True) for i in range(151)])
+    for i in range(76):
+        UserEmailEvent.objects.create(kind='email_changed', previous_email=f'o{i}@x.com', email=f'n{i}@x.com', occurred_at=T0 + timedelta(seconds=i))
+    out = ue.collect(T0, T1)
+    assert len(out['accounts']) == 150 and len(out['email_changes']) == 75 and out['has_more'] is True
+    assert out['next_since'] == T0 + timedelta(seconds=74, microseconds=1)  # changes cut first
+
+
+def test_activated_event_for_user_now_inactive_is_skipped():
+    _joined('a@x.com', T0 - timedelta(days=30), active=False)
+    UserEmailEvent.objects.create(kind='activated', email='a@x.com', occurred_at=T0 + timedelta(hours=1))
+    assert ue.collect(T0, T1)['accounts'] == []
+
+
+def test_activation_lookups_cost_a_constant_number_of_queries():
+    User.objects.bulk_create([User(username=f'u{i}', email=f'u{i}@x.com', date_joined=T0 - timedelta(days=30), is_active=True) for i in range(40)])
+    for i in range(40):
+        UserEmailEvent.objects.create(kind='activated', email=f'U{i}@X.com', occurred_at=T0 + timedelta(minutes=i))
+    with CaptureQueriesContext(connection) as ctx:
+        out = ue.collect(T0, T1)
+    assert len(out['accounts']) == 40
+    assert len(ctx.captured_queries) <= 4
+
+
+@pytest.mark.parametrize('previous', ['', 'merged-1@invalid.tastyspread.local'])
+def test_change_from_blank_or_reserved_address_is_reported_as_an_account(previous):
+    UserEmailEvent.objects.create(kind='email_changed', previous_email=previous, email='real@x.com',
+                                  first_name='Ann', last_name='Lee', occurred_at=T0 + timedelta(hours=3))
+    out = ue.collect(T0, T1)
+    assert out['email_changes'] == []
+    assert out['accounts'] == [{'email': 'real@x.com', 'first_name': 'Ann', 'last_name': 'Lee', 'changed_at': T0 + timedelta(hours=3)}]
+
+
+def test_all_tied_rows_over_the_count_come_back_whole_without_more():
+    """151 rows at one timestamp, each large: one page, over budget, has_more False."""
+    same = T0 + timedelta(hours=1)
+    User.objects.bulk_create([User(username=f'u{i}', email=f'u{i}@x.com', first_name='Я' * 150, last_name='Ж' * 150,
+                                   date_joined=same, is_active=True) for i in range(151)])
+    out = ue.collect(T0, T1)
+    assert len(out['accounts']) == 151
+    assert out['has_more'] is False and out['next_since'] is None
+    assert ue.page_bytes(out['accounts'], out['email_changes']) > ue.PAGE_BYTES  # documented limitation
+
+
+def test_over_budget_page_is_trimmed_at_a_tie_boundary():
+    # 75 groups of two accounts each with long Cyrillic names: about 1.3 KB a row, over the budget.
+    users = []
+    for g in range(75):
+        for j in range(2):
+            users.append(User(username=f'u{g}_{j}', email=f'user{g}.{j}@example.org', first_name='Я' * 150,
+                              last_name='Ж' * 150, date_joined=T0 + timedelta(minutes=g), is_active=True))
+    User.objects.bulk_create(users)
+    out = ue.collect(T0, T1)
+    accounts = out['accounts']
+    assert 0 < len(accounts) < 150 and len(accounts) % 2 == 0  # whole groups only
+    assert ue.page_bytes(accounts, out['email_changes']) <= ue.PAGE_BYTES
+    last = accounts[-1]['changed_at']
+    assert out['has_more'] is True and out['next_since'] == last + timedelta(microseconds=1)
+    first_trimmed = last + timedelta(minutes=1)
+    out2 = ue.collect(out['next_since'], T1)
+    assert [a['changed_at'] for a in out2['accounts'][:2]] == [first_trimmed, first_trimmed]
+
+
+def test_trimming_falls_to_the_changes_list_once_accounts_are_one_group():
+    same = T0 + timedelta(hours=1)
+    User.objects.bulk_create([User(username=f'u{i}', email=f'u{i}@x.com', first_name='Я' * 150, last_name='Ж' * 150,
+                                   date_joined=same, is_active=True) for i in range(40)])
+    for i in range(75):
+        UserEmailEvent.objects.create(kind='email_changed', previous_email=f'o{i}' + 'x' * 200 + '@x.com',
+                                      email=f'n{i}' + 'y' * 200 + '@x.com', occurred_at=T0 + timedelta(minutes=i))
+    out = ue.collect(T0, T1)
+    assert len(out['accounts']) == 40  # the first group is never dropped
+    assert 0 < len(out['email_changes']) < 75
+    assert ue.page_bytes(out['accounts'], out['email_changes']) <= ue.PAGE_BYTES
+    assert out['has_more'] is True
+    assert out['next_since'] == out['email_changes'][-1]['changed_at'] + timedelta(microseconds=1)

@@ -37,3 +37,34 @@ def test_since_after_until_is_400():
 def test_wrong_key_is_401_and_wrong_query_is_400():
     assert _call({**BODY, 'since': T0.isoformat()}, key='nope').status_code == 401
     assert _call({**BODY, 'query': 'user_accounts', 'since': T0.isoformat()}).status_code == 400
+
+
+def test_full_page_with_cyrillic_names_fits_under_64_kib():
+    from django_helm.mailer.models import UserEmailEvent
+    User.objects.bulk_create([
+        User(username=f'u{i}', email=f'firstname.lastname{i:04d}@privaterelay.appleid.com',
+             first_name='Александра', last_name='Монтгомери-Смит',
+             date_joined=T0 + timedelta(seconds=i, microseconds=123456), is_active=True)
+        for i in range(150)
+    ])
+    for i in range(75):
+        UserEmailEvent.objects.create(kind='email_changed', previous_email=f'old.address{i:04d}@gmail.com',
+                                      email=f'new.address{i:04d}@outlook.com', occurred_at=T0 + timedelta(seconds=i, microseconds=5))
+    resp = _call({**BODY, 'since': T0.isoformat(), 'until': (T0 + timedelta(days=1)).isoformat()})
+    data = json.loads(resp.content.decode('utf-8'))
+    assert len(data['accounts']) == 150 and len(data['email_changes']) == 75
+    assert 'Александра' in resp.content.decode('utf-8')  # sent as UTF-8, not \\u escapes
+    assert len(resp.content) < 64 * 1024
+
+
+def test_trimmed_page_body_stays_within_the_byte_budget():
+    from django_helm.mailer.user_emails import PAGE_BYTES
+    User.objects.bulk_create([
+        User(username=f'u{i}', email=f'user{i}@example.org', first_name='Я' * 150, last_name='Ж' * 150,
+             date_joined=T0 + timedelta(seconds=i), is_active=True)
+        for i in range(150)
+    ])
+    resp = _call({**BODY, 'since': T0.isoformat(), 'until': (T0 + timedelta(days=1)).isoformat()})
+    data = json.loads(resp.content.decode('utf-8'))
+    assert data['has_more'] is True and 0 < len(data['accounts']) < 150
+    assert len(resp.content) <= PAGE_BYTES

@@ -86,20 +86,23 @@ def parse_timestamp(value, field):
     return parsed
 
 
-def helm_endpoint(query):
-    """Decorate ``fn(request, body) -> dict`` as a Helm-facing JSON view."""
+def helm_endpoint(query, json_dumps_params=None):
+    """Decorate ``fn(request, body) -> dict`` as a Helm-facing JSON view.
+
+    ``json_dumps_params`` is passed to ``JsonResponse`` for the success body.
+    """
 
     def decorator(fn):
         @wraps(fn)
         def view(request):
-            return _no_store(_handle(request, query, fn))
+            return _no_store(_handle(request, query, fn, json_dumps_params))
 
         return login_not_required(csrf_exempt(view))
 
     return decorator
 
 
-def _handle(request, query, fn):
+def _handle(request, query, fn, json_dumps_params=None):
     config = settings.HELM_ANALYTICS
     configured = config.get('api_key')
     if not configured:
@@ -119,6 +122,6 @@ def _handle(request, query, fn):
     if body.get('project') != config['project']:
         return _error('unknown project')
     try:
-        return JsonResponse(fn(request, body))
+        return JsonResponse(fn(request, body), json_dumps_params=json_dumps_params)
     except BadRequest as exc:
         return _error(str(exc))
