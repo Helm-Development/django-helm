@@ -14,11 +14,6 @@ def normalize(email):
     return (email or '').strip().lower()
 
 
-def _address(email):
-    # Case is kept on purpose: a case-only edit is still a change worth recording.
-    return (email or '').strip()
-
-
 def record_user_change(sender, instance, **kwargs):
     """pre_save: record an activation or an address change on an existing user."""
     if instance._state.adding or instance.pk is None:
@@ -35,7 +30,7 @@ def record_user_change(sender, instance, **kwargs):
     elif (
         was_active
         and is_active
-        and _address(previous['email']) != _address(instance.email)
+        and normalize(previous['email']) != normalize(instance.email)
     ):
         kind, previous_email = UserEmailEvent.KIND_EMAIL_CHANGED, previous['email'] or ''
     else:

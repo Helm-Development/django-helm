@@ -28,9 +28,9 @@ def test_email_change_on_active_user_records_previous_and_new():
     [ev] = UserEmailEvent.objects.all()
     assert (ev.kind, ev.previous_email, ev.email) == ('email_changed', 'old@x.com', 'New@x.com')
 
-def test_case_only_change_is_recorded():
+def test_case_only_change_records_nothing():
     u = _user('a@x.com'); u.email = 'A@x.com'; u.save()
-    assert UserEmailEvent.objects.filter(kind='email_changed').count() == 1
+    assert UserEmailEvent.objects.count() == 0
 
 def test_unchanged_save_records_nothing():
     u = _user('a@x.com'); u.first_name = 'Zed'; u.save()
