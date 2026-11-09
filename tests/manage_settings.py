@@ -29,6 +29,7 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.auth',
     'django_helm.analytics',
+    'django_helm.mailer',
     'django.contrib.admin',
     'django.contrib.messages',
     'django.contrib.sessions',
