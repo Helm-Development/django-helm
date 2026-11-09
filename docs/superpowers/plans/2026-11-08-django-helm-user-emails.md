@@ -27,7 +27,7 @@
 1. A merge sequence `real → placeholder` then `original → real` followed by deleting the placeholder account must leave exactly one change (`original → real`) in the response. (Task 2 test `test_deleting_user_removes_its_events`, Task 3 test `test_siwa_merge_sequence_reports_one_change`.)
 2. `since` later than `until` must be a 400, not an empty 200. (Task 4 `test_since_after_until_is_400`.)
 3. 300 users created in one bulk `bulk_create` with the same `date_joined` must come back in one over-sized page with `has_more` false, not loop forever. (Task 3 `test_ties_are_kept_together_and_cursor_advances`.)
-4. A user whose email changes only in letter case must still produce one `email_changed` event, and a user re-saved with no change must produce none. (Task 2 `test_case_only_change_is_recorded`, `test_unchanged_save_records_nothing`.)
+4. A user whose email changes only in letter case, or who is re-saved with no change, must produce no event. (Task 2 `test_case_only_change_records_nothing`, `test_unchanged_save_records_nothing`.)
 5. Upgrading a backend that has not added `django_helm.mailer` must not break its URLconf; `/helm/user_emails` simply does not resolve. (Task 4 `test_route_absent_without_mailer_app`.)
 
 ---
@@ -125,7 +125,7 @@ Rules (from the spec):
 - No event for a new row (`instance._state.adding` or no existing pk).
 - Previous row fetched with `sender._default_manager.filter(pk=instance.pk).values('email', 'is_active').first()`; missing → no event.
 - `is_active` False → True: `activated` event with the row's current `email`, names, `occurred_at=timezone.now()`.
-- `normalize(email)` differs and the row is active before and after: `email_changed` event with `previous_email` = old address, `email` = new, names snapshot. A case-only change counts.
+- `normalize(email)` differs and the row is active before and after: `email_changed` event with `previous_email` = old address, `email` = new, names snapshot. A case-only change does not count (normalize lower-cases both sides).
 - Both at once (activation and a new address in one save): only `activated` is recorded, and its `email` is the new address. `email_changed` requires the row to be active before and after.
 - `post_delete`: `UserEmailEvent.objects.filter(email__iexact=instance.email).delete()`; a blank email deletes nothing.
 
@@ -163,9 +163,9 @@ def test_email_change_on_active_user_records_previous_and_new():
     [ev] = UserEmailEvent.objects.all()
     assert (ev.kind, ev.previous_email, ev.email) == ('email_changed', 'old@x.com', 'New@x.com')
 
-def test_case_only_change_is_recorded():
+def test_case_only_change_records_nothing():
     u = _user('a@x.com'); u.email = 'A@x.com'; u.save()
-    assert UserEmailEvent.objects.filter(kind='email_changed').count() == 1
+    assert UserEmailEvent.objects.count() == 0
 
 def test_unchanged_save_records_nothing():
     u = _user('a@x.com'); u.first_name = 'Zed'; u.save()

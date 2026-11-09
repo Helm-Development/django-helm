@@ -93,8 +93,8 @@ Written by a `pre_save` receiver connected in `MailerConfig.ready()` to
   verification code is accepted, so this fires once per real change.)
 - New rows produce no event; `date_joined` covers them.
 - Addresses are compared case-insensitively after `strip()`; a case-only
-  change is still an `email_changed` event (Helm lower-cases anyway, so it
-  will be a no-op there).
+  change records nothing (Helm lower-cases every address, so there would be
+  nothing for it to do).
 
 The receiver issues one `values('email', 'is_active')` lookup per user save.
 Events older than **90 days** are deleted at the start of each endpoint call
