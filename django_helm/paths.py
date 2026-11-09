@@ -9,10 +9,12 @@ from django.conf import settings
 
 USER_ACCOUNTS = '/helm/user_accounts'
 ANALYTICS_EXCLUSION_LIST = '/helm/analytics_exclusion_list'
+USER_EMAILS = '/helm/user_emails'
 
 DEFAULTS = {
     'user_accounts': USER_ACCOUNTS,
     'analytics_exclusion_list': ANALYTICS_EXCLUSION_LIST,
+    'user_emails': USER_EMAILS,
 }
 
 

@@ -12,7 +12,7 @@ or not, is marked ``Cache-Control: no-store``. The view never touches
 """
 import hmac
 import json
-from datetime import timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone
 from functools import wraps
 
 from django.conf import settings
@@ -62,6 +62,28 @@ def _parse_body(request):
     except (ValueError, UnicodeDecodeError):
         return None
     return body if isinstance(body, dict) else None
+
+
+def parse_timestamp(value, field):
+    """Parse an ISO 8601 string; naive values are taken as UTC.
+
+    Returns an aware UTC datetime, or a naive UTC one when ``USE_TZ`` is off.
+    Raises ``BadRequest`` for anything that is not an ISO 8601 string.
+    """
+    message = f'{field} must be an ISO 8601 timestamp'
+    if not isinstance(value, str):
+        raise BadRequest(message)
+    if value.endswith('Z'):
+        value = value[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise BadRequest(message) from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+    if not settings.USE_TZ:
+        parsed = parsed.astimezone(dt_timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def helm_endpoint(query):
