@@ -10,7 +10,7 @@ def test_mailer_package_does_not_import_analytics():
     import inspect
 
     import django_helm.mailer
-    import django_helm.mailer.models
+    from django_helm.mailer import apps, checks, models, signals, user_emails, views
 
-    for mod in (django_helm.mailer, django_helm.mailer.models):
+    for mod in (django_helm.mailer, apps, checks, models, signals, user_emails, views):
         assert 'django_helm.analytics' not in inspect.getsource(mod)
