@@ -17,7 +17,7 @@
 - Package version `0.3.0`; `pyproject.toml` version bump, `CHANGELOG.md` entry, README section ship in this plan.
 - The response never contains ids, `hashed_id`, `username`, staff flags or anything from `django_helm.analytics`. Exact top-level keys: `project, generated_at, since, until, accounts, email_changes, has_more, next_since`. Account keys: `email, first_name, last_name, changed_at`. Change keys: `previous_email, email, changed_at`.
 - Only `is_active=True` users with a non-empty `email` are reported. Addresses whose domain ends in `.local`, `.invalid`, `.test`, `.example` or `.localhost` are never reported in either list.
-- `ACCOUNTS_PAGE = 200`, `CHANGES_PAGE = 100`; a cut keeps every row sharing the last `changed_at`; `next_since` = min over cut lists of (last `changed_at` + 1 µs); `since` inclusive, `until` exclusive.
+- `ACCOUNTS_PAGE = 150`, `CHANGES_PAGE = 75`, `PAGE_BYTES = 56 * 1024` (whole tie groups trimmed from the end to fit); a cut keeps every row sharing the last `changed_at`; `next_since` = min over cut lists of (last `changed_at` + 1 µs); `since` inclusive, `until` exclusive.
 - Events older than `EVENT_RETENTION_DAYS = 90` are purged at the start of each endpoint call. Deleting a user deletes every event whose `email` equals that user's address, case-insensitively.
 - Default path `/helm/user_emails`, override key `'user_emails'` in `HELM_ANALYTICS['paths']`. The route exists only when `django_helm.mailer` is installed.
 - Module docstrings explain *why*; no emails in log messages.
@@ -26,7 +26,7 @@
 
 1. A merge sequence `real → placeholder` then `original → real` followed by deleting the placeholder account must leave exactly one change (`original → real`) in the response. (Task 2 test `test_deleting_user_removes_its_events`, Task 3 test `test_siwa_merge_sequence_reports_one_change`.)
 2. `since` later than `until` must be a 400, not an empty 200. (Task 4 `test_since_after_until_is_400`.)
-3. 300 users created in one bulk `bulk_create` with the same `date_joined` must come back in one over-sized page with `has_more` false, not loop forever. (Task 3 `test_ties_are_kept_together_and_cursor_advances`.)
+3. 300 users created in one bulk `bulk_create` with the same `date_joined` must come back together in one over-sized page, not loop forever. The test asserts `has_more` true because a later row exists; the next page returns that row with `has_more` false. When nothing follows the tie group, `has_more` is false (`test_all_tied_rows_over_the_count_come_back_whole_without_more`). (Task 3 `test_ties_are_kept_together_and_cursor_advances`.)
 4. A user whose email changes only in letter case, or who is re-saved with no change, must produce no event. (Task 2 `test_case_only_change_records_nothing`, `test_unchanged_save_records_nothing`.)
 5. Upgrading a backend that has not added `django_helm.mailer` must not break its URLconf; `/helm/user_emails` simply does not resolve. (Task 4 `test_route_absent_without_mailer_app`.)
 
@@ -221,7 +221,7 @@ git commit -m "[HELM-383] Record activations and email changes; forget deleted u
 **Interfaces:**
 - Consumes: `UserEmailEvent`, `normalize` (Tasks 1–2).
 - Produces, all in `user_emails.py`:
-  - `ACCOUNTS_PAGE = 200`, `CHANGES_PAGE = 100`, `EVENT_RETENTION_DAYS = 90`, `RESERVED_SUFFIXES = ('.local', '.invalid', '.test', '.example', '.localhost')`.
+  - `ACCOUNTS_PAGE = 150`, `CHANGES_PAGE = 75`, `PAGE_BYTES = 56 * 1024`, `EVENT_RETENTION_DAYS = 90`, `RESERVED_SUFFIXES = ('.local', '.invalid', '.test', '.example', '.localhost')`.
   - `is_reportable(email: str) -> bool`: non-empty, contains `@`, domain (after the last `@`, lower-cased) does not end with a reserved suffix.
   - `purge_old_events(now) -> int`: deletes events with `occurred_at < now - 90 days`, returns the count.
   - `collect(since, until) -> dict` returning `{'accounts': [...], 'email_changes': [...], 'has_more': bool, 'next_since': datetime | None}` where each account is `{'email', 'first_name', 'last_name', 'changed_at': datetime}` and each change `{'previous_email', 'email', 'changed_at': datetime}`. Datetimes are returned as `datetime` objects; the view serialises.
@@ -298,12 +298,12 @@ def test_ties_are_kept_together_and_cursor_advances():
     assert [a['email'] for a in out2['accounts']] == ['late@x.com'] and out2['has_more'] is False
 
 def test_changes_page_cut_sets_next_since_to_min_over_cut_lists():
-    for i in range(101):
+    for i in range(76):
         UserEmailEvent.objects.create(kind='email_changed', previous_email=f'o{i}@x.com', email=f'n{i}@x.com', occurred_at=T0 + timedelta(minutes=i))
     _joined('acct@x.com', T0 + timedelta(hours=10))
     out = ue.collect(T0, T1)
-    assert len(out['email_changes']) == 100 and out['has_more'] is True
-    assert out['next_since'] == T0 + timedelta(minutes=99, microseconds=1)
+    assert len(out['email_changes']) == 75 and out['has_more'] is True
+    assert out['next_since'] == T0 + timedelta(minutes=74, microseconds=1)
     assert [a['email'] for a in out['accounts']] == ['acct@x.com']  # the uncut list is returned in full
 
 def test_purge_old_events():

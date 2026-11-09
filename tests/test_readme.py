@@ -6,5 +6,6 @@ def test_readme_documents_endpoints():
     for needle in ('## Backend endpoints for Helm', '/helm/user_accounts', '/helm/analytics_exclusion_list',
                    "include('django_helm.urls')", 'HelmUserAnalyticsInline', 'user_accounts_counter',
                    'hashed_id', 'Always include', 'Always exclude', "'paths'", '/helm/user_emails',
-                   'django_helm.mailer', 'email_changes', '90 days'):
+                   'django_helm.mailer', 'email_changes', '90 days', 'is_active=True',
+                   '56 KiB', 'django_helm.E001', 'QuerySet.update()', '"query": "user_emails"'):
         assert needle in text, needle

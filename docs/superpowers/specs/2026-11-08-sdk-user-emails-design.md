@@ -84,8 +84,13 @@ One table, `django_helm_user_email_event`:
 | `first_name`, `last_name` | CharField, blank | snapshot at event time |
 | `occurred_at` | DateTimeField, indexed | server time |
 
-Written by a `pre_save` receiver connected in `MailerConfig.ready()` to
-`get_user_model()`:
+Written by a `pre_save`/`post_save` receiver pair connected in
+`MailerConfig.ready()` to `get_user_model()`. `pre_save` only reads the
+stored `email` and `is_active` and stashes them on the instance; `post_save`
+compares and writes the event, so a save that fails at the database records
+nothing. Both skip `raw` saves (fixture loads), and `pre_save` skips the
+lookup entirely when `update_fields` names neither `email` nor `is_active`.
+All three receivers use the save's `using` alias. Rules:
 
 - `is_active` flips False → True on an existing row → `activated`.
 - `email` changes on a row that is active before and after → `email_changed`
@@ -96,7 +101,14 @@ Written by a `pre_save` receiver connected in `MailerConfig.ready()` to
   change records nothing (Helm lower-cases every address, so there would be
   nothing for it to do).
 
-The receiver issues one `values('email', 'is_active')` lookup per user save.
+The pair issues one `values('email', 'is_active')` lookup per user save that
+may touch either field. `QuerySet.update()`, `bulk_update`, raw SQL and
+`loaddata` bypass the receivers and are not recorded, and nothing before the
+app was installed is recorded.
+
+A system check registered in `ready()` (`django_helm.E001`, tag `models`)
+fails when the user model lacks a concrete `email`, `is_active` or
+`date_joined`. `first_name`/`last_name` are optional and read with `getattr`.
 Events older than **90 days** are deleted at the start of each endpoint call
 (cheap, keeps the table bounded; Helm pulls hourly).
 
@@ -154,14 +166,23 @@ Response:
   range, taken from the user's **current** row (skipped if the user is gone
   or inactive again), `changed_at = occurred_at`. Names and email are the
   current values, never the event snapshot, except where noted below.
-- `email_changes` is every `email_changed` event in range, oldest first.
+- `email_changes` is every `email_changed` event in range, oldest first,
+  whose addresses are both reportable. An event whose new address is
+  reportable but whose previous address is blank or reserved goes to
+  `accounts` instead (event snapshot names, `changed_at = occurred_at`):
+  there is nothing for Helm to rename, so it is a new contact.
 - Ordering: both lists by `changed_at` ascending. **Paging:** at most
-  `ACCOUNTS_PAGE = 200` accounts and `CHANGES_PAGE = 100` email changes per
-  response (about 40 KB worst case against Helm's 64 KB cap). A list that is
-  cut is cut *after* the last row that shares the final `changed_at`, so a
-  page may run a little over; this guarantees progress when many rows share
-  one timestamp (bulk-created users) without putting an id in the cursor.
-  `has_more` is true when either list was cut. `next_since` is the smallest,
+  `ACCOUNTS_PAGE = 150` accounts and `CHANGES_PAGE = 75` email changes per
+  response. A list that is cut is cut *after* the last row that shares the
+  final `changed_at`, so a page may run a little over; this guarantees
+  progress when many rows share one timestamp (bulk-created users) without
+  putting an id in the cursor. The page is then held under
+  `PAGE_BYTES = 56 * 1024` of UTF-8 JSON (the view sends
+  `ensure_ascii=False`; Helm's cap is 64 KiB) by dropping whole tie groups
+  from the end of `accounts`, then of `email_changes`, never the first group
+  of either list. Limitation: one tie group larger than the budget (or the
+  count) is returned whole, so such a page can exceed it.
+  `has_more` is true when either list was cut or trimmed and rows remain. `next_since` is the smallest,
   over the lists that were cut, of (last returned `changed_at` + 1 µs); Helm
   re-asks with `since = next_since` and the same `until`. Rows of the other
   list at or after `next_since` are sent again; the merge is idempotent so

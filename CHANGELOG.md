@@ -7,6 +7,8 @@
 - Deleting a user deletes that user's recorded email events.
 - The response never carries a user id or a Helm hash, and the mailer app never imports from the analytics app, so an email address cannot be tied to analytics.
 - `parse_timestamp` is now a shared helper in `django_helm.endpoints`.
+- A system check, `django_helm.E001`, reports a user model without `email`, `is_active` or `date_joined` when `django_helm.mailer` is installed.
+- `helm_endpoint` accepts `json_dumps_params`; the user emails endpoint sends UTF-8 JSON with `ensure_ascii=False`.
 
 ## 0.2.0
 

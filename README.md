@@ -317,10 +317,14 @@ Select rules in the list and run **Preview matches** to see the first 50 matchin
 
 `/helm/user_emails` tells Helm which verified accounts were created or activated, and which accounts changed their email address, in a time window. Helm uses it to keep your mailing list current. It is served only when `django_helm.mailer` is in `INSTALLED_APPS`; otherwise it answers 404.
 
-Helm sends a JSON body. `since` is required and `until` is optional (defaults to now). Both are ISO 8601 timestamps, and `until` is exclusive:
+**"Verified" means `is_active=True`.** The endpoint reports an account as soon as it is active. That is only correct if your accounts become active only after the user confirms their email address. If you activate accounts at signup, before confirmation, unconfirmed addresses will reach your mailing list.
+
+**User model requirements.** Your user model must have the concrete fields `email`, `is_active` and `date_joined`. Django's default `User` and `AbstractUser` have all three. If one is missing, `manage.py check` fails with `django_helm.E001`. `first_name` and `last_name` are optional; missing names are sent as empty strings.
+
+Helm sends a JSON body with the usual envelope plus a time window. `since` is required and inclusive. `until` is optional, exclusive, and defaults to now. Both are ISO 8601 timestamps. A request where `since` is not before `until` gets HTTP 400.
 
 ```json
-{"since": "2026-11-01T00:00:00Z", "until": "2026-11-08T00:00:00Z"}
+{"query": "user_emails", "project": "myapp", "since": "2026-11-01T00:00:00Z", "until": "2026-11-08T00:00:00Z"}
 ```
 
 The response:
@@ -342,11 +346,15 @@ The response:
 }
 ```
 
-**Paging.** A response holds up to 200 accounts and 100 email changes. When more remain, `has_more` is `true` and `next_since` is the `since` for the next request. Rows that share a timestamp are never split across pages.
+The body is UTF-8 JSON with non-ASCII characters sent as-is, not as `\u` escapes.
 
-**How changes are recorded.** Two Django signal receivers write to the `django_helm_user_email_event` table. One records an `activated` event when an inactive user becomes active. The other records an `email_changed` event when an active user's address changes. A change that only alters letter case records nothing. New users are found from `date_joined`, so signup needs no event. Events older than 90 days are purged each time Helm calls the endpoint. When you delete a user, their events are deleted too.
+**Paging.** A response holds up to 150 accounts and 75 email changes, and is kept under a 56 KiB byte budget. When more remain, `has_more` is `true` and `next_since` is the `since` for the next request. Rows that share a timestamp are never split across pages. To stay under the budget, whole groups of same-timestamp rows are dropped from the end of a page and sent on the next one. One limitation: a single group of rows sharing one timestamp is always sent whole, so a page can exceed the budget, or the count limits, when many accounts share a timestamp (for example, users created in one `bulk_create`).
 
-**Reserved domains.** Addresses ending in `.local`, `.invalid`, `.test`, `.example`, or `.localhost` are never returned. An email change is skipped if either address is reserved.
+**How changes are recorded.** A `pre_save`/`post_save` receiver pair on your user model records events in the `django_helm_user_email_event` table. `pre_save` reads the stored row; `post_save` writes the event, so a save that fails records nothing. An `activated` event is recorded when an inactive user becomes active. An `email_changed` event is recorded when a user who is active before and after the save changes address. A change that only alters letter case records nothing. A `post_delete` receiver deletes a user's events when the user is deleted. New users are found from `date_joined`, so signup needs no event. Events older than 90 days are purged each time Helm calls the endpoint.
+
+Only changes that go through `Model.save()` after `django_helm.mailer` is installed are recorded. `QuerySet.update()`, `bulk_update`, raw SQL and `loaddata` fixtures bypass the receivers and are not recorded. Accounts that existed before you installed the app are still reported by `date_joined` when it falls in the window, but older activations and address changes are not.
+
+**Reserved domains.** Addresses ending in `.local`, `.invalid`, `.test`, `.example`, or `.localhost` are never returned. A change to a reserved address is skipped. A change from a blank or reserved address to a real one is reported as a new account, not as an email change.
 
 **Privacy:** the response carries no user id and no Helm hash, on purpose. This keeps Helm from ever tying an email address to analytics, which are pseudonymous. Do not add either field, and do not join this data with the analytics tables.
 

@@ -19,6 +19,7 @@ VIEWS = [
     ('user_accounts', views.user_accounts),
 ]
 
+
 def _mailer_views():
     """Mailer routes exist only when the customer installed the mailer app."""
     from django.apps import apps
