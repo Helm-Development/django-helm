@@ -72,19 +72,29 @@ def test_content_extra_keys_are_dropped():
     ({'desired_post_time': '2026-11-16'}, 'desired_post_time'),
     ({'updated_at': None}, 'updated_at'),
     ({'campaign': ''}, 'campaign'), ({'campaign': 'has space'}, 'campaign'),
-    ({'campaign': 'x' * 101}, 'campaign'),
+    ({'campaign': 'x' * 101}, 'campaign'), ({'campaign': 'weekly\n'}, 'campaign'),
+    ({'id': '   '}, 'id'),
     ({'requires_review': 'yes'}, 'requires_review'),
     ({'content': {'type': 'instagram_image'}}, 'content'),
     ({'content': facebook_link('  ', 'https://example.com/')}, 'message'),
     ({'content': facebook_link('x' * 2001, 'https://example.com/')}, 'message'),
     ({'content': facebook_link('Hi', 'javascript:alert(1)')}, 'link'),
     ({'content': facebook_link('Hi', 'example.com/a')}, 'link'),
+    ({'content': facebook_link('Hi', 'https://')}, 'link'),
+    ({'content': facebook_link('Hi', 'https:///path')}, 'link'),
+    ({'content': facebook_link('Hi', 'https://example.com/a b')}, 'link'),
+    ({'content': facebook_link('Hi', 'https://example.com/a\nb')}, 'link'),
     ({'content': facebook_link('Hi', 'https://example.com/' + 'a' * 2048)}, 'link'),
     ({'content': 'nope'}, 'content'),
 ])
 def test_invalid_posts_raise(over, field):
     with pytest.raises(InvalidSocialPost, match=field):
         serialize(_post(**over))
+
+
+def test_scheme_is_case_insensitive():
+    out = serialize(_post(content=facebook_link('Hi', 'HTTPS://Example.com/a')))
+    assert out['content']['link'] == 'HTTPS://Example.com/a'
 
 
 def test_message_of_exactly_max_length_is_accepted():
@@ -123,6 +133,20 @@ def heavy(since):
     return [_post(id=f'h{i:02d}', updated_at=T0 + timedelta(seconds=i),
                   content=facebook_link(msg, 'https://example.com/'))
             for i in range(40)]
+
+
+def same_time(n):
+    def provider(since):
+        return [_post(id=f'{i:03d}', updated_at=T0) for i in range(n)]
+    return provider
+
+
+def abc(since):
+    return [_post(id=i, updated_at=T0) for i in 'cab']
+
+
+def ties(since):
+    return same_time(MAX_POSTS + 5)(since)
 
 
 def one_bad(since):
@@ -186,6 +210,8 @@ def test_caps_at_max_posts_and_sets_has_more(settings):
     assert data['count'] == MAX_POSTS and data['has_more'] is True
     assert data['posts'][0]['id'] == 'p0000'
     assert data['posts'][-1]['id'] == f'p{MAX_POSTS - 1:04d}'
+    assert data['next'] == {'since': data['posts'][-1]['updated_at'],
+                            'after_id': f'p{MAX_POSTS - 1:04d}'}
 
 
 def test_byte_budget_stops_early_and_sets_has_more(settings):
@@ -203,6 +229,8 @@ def test_byte_budget_stops_early_and_sets_has_more(settings):
     assert data['count'] == expected and data['has_more'] is True
     assert [p['id'] for p in data['posts']] == [f'h{i:02d}' for i in range(expected)]
     assert len(resp.content) < 64 * 1024
+    assert data['next'] == {'since': data['posts'][-1]['updated_at'],
+                            'after_id': data['posts'][-1]['id']}
 
 
 def test_unconfigured_provider_is_400(settings):
@@ -218,7 +246,46 @@ def test_invalid_post_from_provider_propagates(settings):
 
 def test_empty_provider(settings):
     assert _call(settings, 'tests.test_social_posts.none') == {
-        'project': 'test-project', 'generated_at': ANY, 'count': 0, 'has_more': False, 'posts': []}
+        'project': 'test-project', 'generated_at': ANY, 'count': 0, 'has_more': False, 'next': None, 'posts': []}
+
+
+def test_after_id_skips_posts_already_seen_at_the_same_timestamp(settings):
+    data = _call(settings, 'tests.test_social_posts.abc',
+                 since=T0.isoformat(), after_id='a')
+    assert [p['id'] for p in data['posts']] == ['b', 'c']
+
+
+def test_paging_through_ties_reaches_every_post(settings):
+    seen, calls, extra = [], 0, {}
+    while True:
+        data = _call(settings, 'tests.test_social_posts.ties', **extra)
+        calls += 1
+        seen += [p['id'] for p in data['posts']]
+        if not data['has_more']:
+            break
+        extra = data['next']
+        assert calls < 10
+    assert calls == 2
+    assert sorted(seen) == [f'{i:03d}' for i in range(MAX_POSTS + 5)]
+
+
+def test_next_is_null_when_nothing_left(settings):
+    data = _call(settings, 'tests.test_social_posts.abc')
+    assert data['has_more'] is False and data['next'] is None
+
+
+def test_after_id_requires_since(settings):
+    resp = _raw(settings, 'tests.test_social_posts.abc', after_id='a')
+    assert resp.status_code == 400
+    assert json.loads(resp.content) == {'error': 'after_id requires since'}
+
+
+@pytest.mark.parametrize('bad', [5, '', 'x' * 201])
+def test_bad_after_id_is_400(settings, bad):
+    resp = _raw(settings, 'tests.test_social_posts.abc', since=T0.isoformat(), after_id=bad)
+    assert resp.status_code == 400
+    assert json.loads(resp.content) == {
+        'error': 'after_id must be a string of at most 200 characters'}
 
 
 def test_wrong_key_is_401(settings):

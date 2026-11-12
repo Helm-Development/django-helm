@@ -7,5 +7,5 @@ def test_readme_documents_endpoints():
                    "include('django_helm.urls')", 'HelmUserAnalyticsInline', 'user_accounts_counter',
                    'hashed_id', 'Always include', 'Always exclude', "'paths'",
                    '/helm/social_posts', 'social_posts_provider', 'SocialPost', 'facebook_link',
-                   'requires_review'):
+                   'requires_review', 'after_id'):
         assert needle in text, needle

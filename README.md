@@ -359,7 +359,13 @@ HELM_ANALYTICS = {
 | `requires_review` | `True` holds the post in Helm until someone approves it. Defaults to `False`. |
 | `content` | `facebook_link(message, link)`. The message is at most 2,000 characters; your app must shorten longer text itself, or `InvalidSocialPost` is raised. `link` is the one URL Helm replaces with a tracking link. |
 
-**Limits and failure.** At most 50 posts per response, oldest `updated_at` first, and the response is also cut to stay under Helm's 64 KB limit. `has_more` is set whenever posts were left out for either reason, so Helm asks again with a later `since`. A post that breaks the rules raises `InvalidSocialPost` in your app and nothing is sent.
+**Limits and failure.** At most 50 posts per response, oldest `updated_at` first, and the response is also cut to stay under Helm's 64 KB limit. `has_more` is set whenever posts were left out for either reason, so Helm asks again. Helm pages with `since` plus an optional `after_id` and reads the `next` cursor from the response, so many posts sharing one `updated_at` are still all delivered; your provider only ever sees `since`.
+
+**Time zones.** `since` is an aware UTC datetime. Projects with `USE_TZ = False` get a naive UTC `since` and must return times converted to UTC, because a naive value is read as UTC.
+
+**Rule breaks.** A post that breaks the rules raises `InvalidSocialPost` in your app. The whole response fails and no post is sent until it is fixed.
+
+**Changes after acceptance.** Once Helm has accepted a post, later changes to it are not picked up. Issue a new `id` for different content.
 
 **Not configured.** The endpoint answers 400 until `social_posts_provider` is set.
 

@@ -2,7 +2,8 @@
 
 The host app registers a provider, ``HELM_ANALYTICS['social_posts_provider']``:
 a dotted path to a callable ``(since) -> iterable[SocialPost]``. ``since`` is an
-aware datetime or ``None`` (meaning all posts). The SDK validates every post
+aware UTC datetime (a naive UTC one when ``USE_TZ`` is off) or ``None`` (meaning
+all posts). The SDK validates every post
 and serves it; it does not know what the posts are or where they come from.
 
 Contract (field names are fixed): ``id``, ``platform``, ``desired_post_time``,
@@ -17,6 +18,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.utils.module_loading import import_string
@@ -68,6 +70,18 @@ def _utc_iso(post_id, field, value):
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _valid_link(link):
+    if not isinstance(link, str) or len(link) > _MAX_LINK:
+        return False
+    if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in link):
+        return False
+    try:
+        parts = urlsplit(link)
+        return parts.scheme in ('http', 'https') and bool(parts.netloc and parts.hostname)
+    except ValueError:
+        return False
+
+
 def _content(post_id, content):
     if not isinstance(content, dict) or content.get('type') != 'facebook_link':
         _fail(post_id, 'content', "must be a dict with type 'facebook_link'")
@@ -75,9 +89,9 @@ def _content(post_id, content):
     if not isinstance(message, str) or not message.strip() or len(message) > MAX_MESSAGE_LENGTH:
         _fail(post_id, 'message', f'must be a non-blank string of at most {MAX_MESSAGE_LENGTH} characters')
     link = content.get('link')
-    if (not isinstance(link, str) or len(link) > _MAX_LINK
-            or not link.startswith(('http://', 'https://'))):
-        _fail(post_id, 'link', f'must be an http(s) URL of at most {_MAX_LINK} characters')
+    if not _valid_link(link):
+        _fail(post_id, 'link', f'must be an http(s) URL with a host, no whitespace, '
+                               f'of at most {_MAX_LINK} characters')
     return {'type': 'facebook_link', 'message': message, 'link': link}
 
 
@@ -86,7 +100,7 @@ def serialize(post: SocialPost) -> dict:
     if not isinstance(post, SocialPost):
         raise InvalidSocialPost(f'provider must return SocialPost objects, got {type(post).__name__}')
     pid = post.id
-    if not isinstance(pid, str) or not 1 <= len(pid) <= _MAX_ID:
+    if not isinstance(pid, str) or not pid.strip() or len(pid) > _MAX_ID:
         _fail(pid, 'id', f'must be a string of 1-{_MAX_ID} characters')
     if post.platform not in PLATFORMS:
         _fail(pid, 'platform', f'must be one of {PLATFORMS}')
@@ -95,7 +109,7 @@ def serialize(post: SocialPost) -> dict:
     campaign = post.campaign
     if campaign is not None and not (
         isinstance(campaign, str) and len(campaign) <= _MAX_CAMPAIGN
-        and _CAMPAIGN_RE.match(campaign)
+        and _CAMPAIGN_RE.fullmatch(campaign)
     ):
         _fail(pid, 'campaign', f'must be None or 1-{_MAX_CAMPAIGN} characters of letters, digits, - and _')
     if not isinstance(post.requires_review, bool):
@@ -111,17 +125,39 @@ def serialize(post: SocialPost) -> dict:
     }
 
 
+def _utc(value):
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _cursor(body):
+    """Return (since, after_id) from the request body."""
+    raw_since = body.get('since')
+    since = None if raw_since is None else parse_since(raw_since)
+    after_id = body.get('after_id')
+    if after_id is None:
+        return since, None
+    if not isinstance(after_id, str) or not 1 <= len(after_id) <= _MAX_ID:
+        raise BadRequest(f'after_id must be a string of at most {_MAX_ID} characters')
+    if since is None:
+        raise BadRequest('after_id requires since')
+    return since, after_id
+
+
 @helm_endpoint('social_posts')
 def social_posts(request, body):
     config = settings.HELM_ANALYTICS
     dotted = config.get('social_posts_provider')
     if not dotted:
         raise BadRequest('social posts are not configured')
-    raw_since = body.get('since')
-    since = None if raw_since is None else parse_since(raw_since)
+    since, after_id = _cursor(body)
     provider = import_string(dotted)
-    serialized = [serialize(post) for post in provider(since)]
-    serialized.sort(key=lambda p: (datetime.fromisoformat(p['updated_at']), p['id']))
+    keyed = [(datetime.fromisoformat(p['updated_at']), p['id'], p)
+             for p in (serialize(post) for post in provider(since))]
+    keyed.sort(key=lambda k: k[:2])
+    if after_id is not None:
+        seen_up_to = (_utc(since), after_id)
+        keyed = [k for k in keyed if k[:2] > seen_up_to]
+    serialized = [k[2] for k in keyed]
     posts, total = [], 0
     for post in serialized[:MAX_POSTS]:
         # Same escaping JsonResponse uses (ensure_ascii), so this is the wire size.
@@ -129,10 +165,12 @@ def social_posts(request, body):
         if posts and total > MAX_RESPONSE_BYTES:
             break
         posts.append(post)
+    has_more = len(posts) < len(serialized)
     return {
         'project': config['project'],
         'generated_at': datetime.now(timezone.utc).isoformat(),
         'count': len(posts),
-        'has_more': len(posts) < len(serialized),
+        'has_more': has_more,
+        'next': {'since': posts[-1]['updated_at'], 'after_id': posts[-1]['id']} if has_more else None,
         'posts': posts,
     }
