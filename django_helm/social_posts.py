@@ -70,8 +70,19 @@ def _utc_iso(post_id, field, value):
     return value.astimezone(timezone.utc).isoformat()
 
 
+def _storable(text):
+    """True if Helm's database can store ``text``: no NUL, encodable as UTF-8."""
+    if '\x00' in text:
+        return False
+    try:
+        text.encode('utf-8')
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _valid_link(link):
-    if not isinstance(link, str) or len(link) > _MAX_LINK:
+    if not isinstance(link, str) or len(link) > _MAX_LINK or not _storable(link):
         return False
     if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in link):
         return False
@@ -86,7 +97,8 @@ def _content(post_id, content):
     if not isinstance(content, dict) or content.get('type') != 'facebook_link':
         _fail(post_id, 'content', "must be a dict with type 'facebook_link'")
     message = content.get('message')
-    if not isinstance(message, str) or not message.strip() or len(message) > MAX_MESSAGE_LENGTH:
+    if not isinstance(message, str) or not message.strip() or len(message) > MAX_MESSAGE_LENGTH \
+            or not _storable(message):
         _fail(post_id, 'message', f'must be a non-blank string of at most {MAX_MESSAGE_LENGTH} characters')
     link = content.get('link')
     if not _valid_link(link):
@@ -100,7 +112,8 @@ def serialize(post: SocialPost) -> dict:
     if not isinstance(post, SocialPost):
         raise InvalidSocialPost(f'provider must return SocialPost objects, got {type(post).__name__}')
     pid = post.id
-    if not isinstance(pid, str) or not pid.strip() or len(pid) > _MAX_ID:
+    if not isinstance(pid, str) or not pid.strip() or len(pid) > _MAX_ID \
+            or not _storable(pid):
         _fail(pid, 'id', f'must be a string of 1-{_MAX_ID} characters')
     if post.platform not in PLATFORMS:
         _fail(pid, 'platform', f'must be one of {PLATFORMS}')
@@ -109,6 +122,7 @@ def serialize(post: SocialPost) -> dict:
     campaign = post.campaign
     if campaign is not None and not (
         isinstance(campaign, str) and len(campaign) <= MAX_CAMPAIGN_LENGTH
+        and _storable(campaign)
         and _CAMPAIGN_RE.fullmatch(campaign)
     ):
         _fail(pid, 'campaign', f'must be None or 1-{MAX_CAMPAIGN_LENGTH} characters of letters, digits, - and _')

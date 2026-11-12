@@ -363,7 +363,7 @@ HELM_ANALYTICS = {
 
 **Time zones.** `since` is an aware UTC datetime. Projects with `USE_TZ = False` get a naive UTC `since` and must return times converted to UTC, because a naive value is read as UTC.
 
-**Rule breaks.** A post that breaks the rules raises `InvalidSocialPost` in your app. The whole response fails and no post is sent until it is fixed.
+**Rule breaks.** A post that breaks the rules raises `InvalidSocialPost` in your app. The whole response fails and no post is sent until it is fixed. Text containing a NUL character or broken Unicode (such as a lone surrogate) is refused, because Helm cannot store it.
 
 **Changes after acceptance.** Once Helm has accepted a post, later changes to it are not picked up. Issue a new `id` for different content.
 
