@@ -1,6 +1,6 @@
 [project]
 name = "django-helm"
-version = "0.2.0"
+version = "0.3.0"
 description = "Django integration for Helm — logging, attribution, and more"
 requires-python = ">=3.10"
 dependencies = ["requests"]

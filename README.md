@@ -156,7 +156,7 @@ Useful as a Sentry breadcrumb or a debug endpoint to spot queue pressure.
 
 ## Backend endpoints for Helm
 
-Helm can ask your backend two questions: how many user accounts you have, and which users to leave out of analytics. This section adds both as endpoints in your Django project.
+Helm can ask your backend three things: how many user accounts you have, which users to leave out of analytics, and which social posts are ready to publish. This section adds all three as endpoints in your Django project.
 
 ### Install
 
@@ -207,6 +207,7 @@ While `api_key` is empty, every endpoint answers 404 and `init()` logs a warning
 |---|---|
 | User accounts | `/helm/user_accounts` |
 | Analytics exclusion list | `/helm/analytics_exclusion_list` |
+| Social posts | `/helm/social_posts` |
 
 These match the placeholders in Helm's Backend SDK tab. Leave them alone unless you must move them.
 
@@ -309,6 +310,58 @@ Helm reads at most 64 KB per response, roughly 900 exclusions, so keep rules tar
 Select rules in the list and run **Preview matches** to see the first 50 matching values before you rely on them.
 
 `HELM_ANALYTICS['models']` is reserved for future tables that reference non-user entities. Leave it unset.
+
+### Social posts endpoint
+
+`/helm/social_posts` is how Helm learns about the social posts your app has generated. Helm polls it, puts a tracking link on each post, holds posts that need review, and publishes at the desired time.
+
+**The provider.** You supply a function that returns the posts; the SDK validates and serves them.
+
+```python
+# myapp/helm.py
+from django_helm.social_posts import SocialPost, facebook_link
+
+def social_posts(since):
+    """Return the posts created or changed at or after `since` (None means all)."""
+    rows = GeneratedPost.objects.all()
+    if since is not None:
+        rows = rows.filter(updated_at__gte=since)
+    return [
+        SocialPost(
+            id=row.public_id,
+            platform='facebook',
+            desired_post_time=row.post_at,
+            updated_at=row.updated_at,
+            campaign=row.campaign or None,
+            requires_review=row.needs_review,
+            content=facebook_link(row.caption, row.link),
+        )
+        for row in rows
+    ]
+```
+
+```python
+HELM_ANALYTICS = {
+    # ... existing keys
+    'social_posts_provider': 'myapp.helm.social_posts',
+}
+```
+
+**Fields.**
+
+| Field | Meaning |
+|---|---|
+| `id` | Yours. Stable and unique in the project, up to 200 characters. Helm ignores a post ID it has already accepted. |
+| `platform` | `facebook`. |
+| `desired_post_time` | When the post should go out. Naive datetimes are taken as UTC; Helm receives UTC. |
+| `updated_at` | When the post last changed. Used for `since` and ordering. |
+| `campaign` | Optional slug (letters, digits, `-`, `_`, up to 100 characters). Posts without one use the platform's one-off tracking link. |
+| `requires_review` | `True` holds the post in Helm until someone approves it. Defaults to `False`. |
+| `content` | `facebook_link(message, link)`. `link` is the one URL Helm replaces with a tracking link. |
+
+**Limits and failure.** At most 500 posts per response, oldest `updated_at` first, with `has_more` set when there are more. A post that breaks the rules raises `InvalidSocialPost` in your app and nothing is sent.
+
+**Not configured.** The endpoint answers 400 until `social_posts_provider` is set.
 
 ### `hashed_id` is not the Helm hash
 
