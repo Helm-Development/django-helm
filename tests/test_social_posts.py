@@ -5,7 +5,7 @@ import pytest
 from django.test import RequestFactory
 
 from django_helm.social_posts import (
-    MAX_POSTS, InvalidSocialPost, SocialPost, facebook_link, serialize,
+    MAX_MESSAGE_LENGTH, MAX_POSTS, MAX_RESPONSE_BYTES, InvalidSocialPost, SocialPost, facebook_link, serialize,
 )
 
 UTC = timezone.utc
@@ -76,6 +76,7 @@ def test_content_extra_keys_are_dropped():
     ({'requires_review': 'yes'}, 'requires_review'),
     ({'content': {'type': 'instagram_image'}}, 'content'),
     ({'content': facebook_link('  ', 'https://example.com/')}, 'message'),
+    ({'content': facebook_link('x' * 2001, 'https://example.com/')}, 'message'),
     ({'content': facebook_link('Hi', 'javascript:alert(1)')}, 'link'),
     ({'content': facebook_link('Hi', 'example.com/a')}, 'link'),
     ({'content': facebook_link('Hi', 'https://example.com/' + 'a' * 2048)}, 'link'),
@@ -84,6 +85,11 @@ def test_content_extra_keys_are_dropped():
 def test_invalid_posts_raise(over, field):
     with pytest.raises(InvalidSocialPost, match=field):
         serialize(_post(**over))
+
+
+def test_message_of_exactly_max_length_is_accepted():
+    out = serialize(_post(content=facebook_link('x' * MAX_MESSAGE_LENGTH, 'https://example.com/')))
+    assert len(out['content']['message']) == 2000
 
 
 def test_non_socialpost_raises():
@@ -110,6 +116,13 @@ def generator(since):
 def too_many(since):
     return [_post(id=f'p{i:04d}', updated_at=T0 + timedelta(seconds=i))
             for i in range(MAX_POSTS + 3)]
+
+
+def heavy(since):
+    msg = '\U0001f373' * MAX_MESSAGE_LENGTH  # astral: 12 bytes escaped
+    return [_post(id=f'h{i:02d}', updated_at=T0 + timedelta(seconds=i),
+                  content=facebook_link(msg, 'https://example.com/'))
+            for i in range(40)]
 
 
 def one_bad(since):
@@ -173,6 +186,23 @@ def test_caps_at_max_posts_and_sets_has_more(settings):
     assert data['count'] == MAX_POSTS and data['has_more'] is True
     assert data['posts'][0]['id'] == 'p0000'
     assert data['posts'][-1]['id'] == f'p{MAX_POSTS - 1:04d}'
+
+
+def test_byte_budget_stops_early_and_sets_has_more(settings):
+    resp = _raw(settings, 'tests.test_social_posts.heavy')
+    assert resp.status_code == 200
+    data = json.loads(resp.content)
+    sizes = [len(json.dumps(p)) for p in map(serialize, heavy(None))]
+    expected, total = 1, sizes[0]
+    for size in sizes[1:]:
+        if total + size > MAX_RESPONSE_BYTES:
+            break
+        total += size
+        expected += 1
+    assert expected in (1, 2)
+    assert data['count'] == expected and data['has_more'] is True
+    assert [p['id'] for p in data['posts']] == [f'h{i:02d}' for i in range(expected)]
+    assert len(resp.content) < 64 * 1024
 
 
 def test_unconfigured_provider_is_400(settings):

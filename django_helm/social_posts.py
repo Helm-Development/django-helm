@@ -13,6 +13,7 @@ platform ``facebook`` and content type ``facebook_link`` (``type``, ``message``,
 A post that breaks the rules raises ``InvalidSocialPost`` in the host app, so a
 malformed post never reaches Helm.
 """
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -23,7 +24,10 @@ from django.utils.module_loading import import_string
 from django_helm.analytics.user_accounts import parse_since
 from django_helm.endpoints import BadRequest, helm_endpoint
 
-MAX_POSTS = 500
+MAX_POSTS = 50
+MAX_MESSAGE_LENGTH = 2000
+# Helm refuses SDK responses over 64 KB; stay well under it.
+MAX_RESPONSE_BYTES = 48_000
 PLATFORMS = ('facebook',)
 
 _MAX_ID = 200
@@ -68,8 +72,8 @@ def _content(post_id, content):
     if not isinstance(content, dict) or content.get('type') != 'facebook_link':
         _fail(post_id, 'content', "must be a dict with type 'facebook_link'")
     message = content.get('message')
-    if not isinstance(message, str) or not message.strip():
-        _fail(post_id, 'message', 'must be a non-blank string')
+    if not isinstance(message, str) or not message.strip() or len(message) > MAX_MESSAGE_LENGTH:
+        _fail(post_id, 'message', f'must be a non-blank string of at most {MAX_MESSAGE_LENGTH} characters')
     link = content.get('link')
     if (not isinstance(link, str) or len(link) > _MAX_LINK
             or not link.startswith(('http://', 'https://'))):
@@ -118,10 +122,17 @@ def social_posts(request, body):
     provider = import_string(dotted)
     serialized = [serialize(post) for post in provider(since)]
     serialized.sort(key=lambda p: (datetime.fromisoformat(p['updated_at']), p['id']))
+    posts, total = [], 0
+    for post in serialized[:MAX_POSTS]:
+        # Same escaping JsonResponse uses (ensure_ascii), so this is the wire size.
+        total += len(json.dumps(post))
+        if posts and total > MAX_RESPONSE_BYTES:
+            break
+        posts.append(post)
     return {
         'project': config['project'],
         'generated_at': datetime.now(timezone.utc).isoformat(),
-        'count': min(len(serialized), MAX_POSTS),
-        'has_more': len(serialized) > MAX_POSTS,
-        'posts': serialized[:MAX_POSTS],
+        'count': len(posts),
+        'has_more': len(posts) < len(serialized),
+        'posts': posts,
     }
