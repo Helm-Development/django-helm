@@ -33,7 +33,7 @@ MAX_RESPONSE_BYTES = 48_000
 PLATFORMS = ('facebook',)
 
 _MAX_ID = 200
-_MAX_CAMPAIGN = 100
+MAX_CAMPAIGN_LENGTH = 80
 _MAX_LINK = 2048
 _CAMPAIGN_RE = re.compile(r'^[-a-zA-Z0-9_]+$')
 
@@ -108,10 +108,10 @@ def serialize(post: SocialPost) -> dict:
     updated = _utc_iso(pid, 'updated_at', post.updated_at)
     campaign = post.campaign
     if campaign is not None and not (
-        isinstance(campaign, str) and len(campaign) <= _MAX_CAMPAIGN
+        isinstance(campaign, str) and len(campaign) <= MAX_CAMPAIGN_LENGTH
         and _CAMPAIGN_RE.fullmatch(campaign)
     ):
-        _fail(pid, 'campaign', f'must be None or 1-{_MAX_CAMPAIGN} characters of letters, digits, - and _')
+        _fail(pid, 'campaign', f'must be None or 1-{MAX_CAMPAIGN_LENGTH} characters of letters, digits, - and _')
     if not isinstance(post.requires_review, bool):
         _fail(pid, 'requires_review', 'must be a bool')
     return {

@@ -355,7 +355,7 @@ HELM_ANALYTICS = {
 | `platform` | `facebook`. |
 | `desired_post_time` | When the post should go out. Naive datetimes are taken as UTC; Helm receives UTC. |
 | `updated_at` | When the post last changed. Used for `since` and ordering. |
-| `campaign` | Optional slug (letters, digits, `-`, `_`, up to 100 characters). Posts without one use the platform's one-off tracking link. |
+| `campaign` | Optional slug (letters, digits, `-`, `_`, up to 80 characters). Posts without one use the platform's one-off tracking link. |
 | `requires_review` | `True` holds the post in Helm until someone approves it. Defaults to `False`. |
 | `content` | `facebook_link(message, link)`. The message is at most 2,000 characters; your app must shorten longer text itself, or `InvalidSocialPost` is raised. `link` is the one URL Helm replaces with a tracking link. |
 

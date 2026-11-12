@@ -5,7 +5,7 @@ import pytest
 from django.test import RequestFactory
 
 from django_helm.social_posts import (
-    MAX_MESSAGE_LENGTH, MAX_POSTS, MAX_RESPONSE_BYTES, InvalidSocialPost, SocialPost, facebook_link, serialize,
+    MAX_CAMPAIGN_LENGTH, MAX_MESSAGE_LENGTH, MAX_POSTS, MAX_RESPONSE_BYTES, InvalidSocialPost, SocialPost, facebook_link, serialize,
 )
 
 UTC = timezone.utc
@@ -72,7 +72,7 @@ def test_content_extra_keys_are_dropped():
     ({'desired_post_time': '2026-11-16'}, 'desired_post_time'),
     ({'updated_at': None}, 'updated_at'),
     ({'campaign': ''}, 'campaign'), ({'campaign': 'has space'}, 'campaign'),
-    ({'campaign': 'x' * 101}, 'campaign'), ({'campaign': 'weekly\n'}, 'campaign'),
+    ({'campaign': 'x' * 81}, 'campaign'), ({'campaign': 'weekly\n'}, 'campaign'),
     ({'id': '   '}, 'id'),
     ({'requires_review': 'yes'}, 'requires_review'),
     ({'content': {'type': 'instagram_image'}}, 'content'),
@@ -95,6 +95,11 @@ def test_invalid_posts_raise(over, field):
 def test_scheme_is_case_insensitive():
     out = serialize(_post(content=facebook_link('Hi', 'HTTPS://Example.com/a')))
     assert out['content']['link'] == 'HTTPS://Example.com/a'
+
+
+def test_campaign_of_exactly_max_length_is_accepted():
+    assert MAX_CAMPAIGN_LENGTH == 80
+    assert serialize(_post(campaign='x' * 80))['campaign'] == 'x' * 80
 
 
 def test_message_of_exactly_max_length_is_accepted():
