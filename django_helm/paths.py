@@ -9,10 +9,12 @@ from django.conf import settings
 
 USER_ACCOUNTS = '/helm/user_accounts'
 ANALYTICS_EXCLUSION_LIST = '/helm/analytics_exclusion_list'
+SOCIAL_POSTS = '/helm/social_posts'
 
 DEFAULTS = {
     'user_accounts': USER_ACCOUNTS,
     'analytics_exclusion_list': ANALYTICS_EXCLUSION_LIST,
+    'social_posts': SOCIAL_POSTS,
 }
 
 

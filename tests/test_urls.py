@@ -5,6 +5,10 @@ def test_default_path_is_registered():
     assert reverse('helm_analytics_exclusion_list') == '/helm/analytics_exclusion_list'
 
 
+def test_social_posts_path_is_registered():
+    assert reverse('helm_social_posts') == '/helm/social_posts'
+
+
 def test_override_changes_registered_path(settings):
     from django_helm.urls import build_urlpatterns
     settings.HELM_ANALYTICS = {
