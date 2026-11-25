@@ -7,5 +7,7 @@ def test_readme_documents_endpoints():
                    "include('django_helm.urls')", 'HelmUserAnalyticsInline', 'user_accounts_counter',
                    'hashed_id', 'Always include', 'Always exclude', "'paths'", '/helm/user_emails',
                    'django_helm.mailer', 'email_changes', '90 days', 'is_active=True',
-                   '56 KiB', 'django_helm.E001', 'QuerySet.update()', '"query": "user_emails"'):
+                   '56 KiB', 'django_helm.E001', 'QuerySet.update()', '"query": "user_emails"',
+                   '/helm/social_posts', 'social_posts_provider', 'SocialPost', 'facebook_link',
+                   'requires_review', 'after_id'):
         assert needle in text, needle

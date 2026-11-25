@@ -156,7 +156,7 @@ Useful as a Sentry breadcrumb or a debug endpoint to spot queue pressure.
 
 ## Backend endpoints for Helm
 
-Helm can ask your backend three questions: how many user accounts you have, which users to leave out of analytics, and which verified users have new or changed email addresses. This section adds all three as endpoints in your Django project.
+Helm can ask your backend four things: how many user accounts you have, which users to leave out of analytics, which verified users have new or changed email addresses, and which social posts are ready to publish. This section adds all four as endpoints in your Django project.
 
 ### Install
 
@@ -209,6 +209,7 @@ While `api_key` is empty, every endpoint answers 404 and `init()` logs a warning
 | User accounts | `/helm/user_accounts` |
 | Analytics exclusion list | `/helm/analytics_exclusion_list` |
 | User emails | `/helm/user_emails` |
+| Social posts | `/helm/social_posts` |
 
 These match the placeholders in Helm's Backend SDK tab. Leave them alone unless you must move them.
 
@@ -357,6 +358,64 @@ Only changes that go through `Model.save()` after `django_helm.mailer` is instal
 **Reserved domains.** Addresses ending in `.local`, `.invalid`, `.test`, `.example`, or `.localhost` are never returned. A change to a reserved address is skipped. A change from a blank or reserved address to a real one is reported as a new account, not as an email change.
 
 **Privacy:** the response carries no user id and no Helm hash, on purpose. This keeps Helm from ever tying an email address to analytics, which are pseudonymous. Do not add either field, and do not join this data with the analytics tables.
+
+### Social posts endpoint
+
+`/helm/social_posts` is how Helm learns about the social posts your app has generated. Helm polls it, puts a tracking link on each post, holds posts that need review, and publishes at the desired time.
+
+**The provider.** You supply a function that returns the posts; the SDK validates and serves them.
+
+```python
+# myapp/helm.py
+from django_helm.social_posts import SocialPost, facebook_link
+
+def social_posts(since):
+    """Return the posts created or changed at or after `since` (None means all)."""
+    rows = GeneratedPost.objects.all()
+    if since is not None:
+        rows = rows.filter(updated_at__gte=since)
+    return [
+        SocialPost(
+            id=row.public_id,
+            platform='facebook',
+            desired_post_time=row.post_at,
+            updated_at=row.updated_at,
+            campaign=row.campaign or None,
+            requires_review=row.needs_review,
+            content=facebook_link(row.caption, row.link),
+        )
+        for row in rows
+    ]
+```
+
+```python
+HELM_ANALYTICS = {
+    # ... existing keys
+    'social_posts_provider': 'myapp.helm.social_posts',
+}
+```
+
+**Fields.**
+
+| Field | Meaning |
+|---|---|
+| `id` | Yours. Stable and unique in the project, up to 200 characters. Helm ignores a post ID it has already accepted. |
+| `platform` | `facebook`. |
+| `desired_post_time` | When the post should go out. Naive datetimes are taken as UTC; Helm receives UTC. |
+| `updated_at` | When the post last changed. Used for `since` and ordering. |
+| `campaign` | Optional slug (letters, digits, `-`, `_`, up to 80 characters). Posts without one use the platform's one-off tracking link. |
+| `requires_review` | `True` holds the post in Helm until someone approves it. Defaults to `False`. |
+| `content` | `facebook_link(message, link)`. The message is at most 2,000 characters; your app must shorten longer text itself, or `InvalidSocialPost` is raised. `link` is the one URL Helm replaces with a tracking link. |
+
+**Limits and failure.** At most 50 posts per response, oldest `updated_at` first, and the response is also cut to stay under Helm's 64 KB limit. `has_more` is set whenever posts were left out for either reason, so Helm asks again. Helm pages with `since` plus an optional `after_id` and reads the `next` cursor from the response, so many posts sharing one `updated_at` are still all delivered; your provider only ever sees `since`.
+
+**Time zones.** `since` is an aware UTC datetime. Projects with `USE_TZ = False` get a naive UTC `since` and must return times converted to UTC, because a naive value is read as UTC.
+
+**Rule breaks.** A post that breaks the rules raises `InvalidSocialPost` in your app. The whole response fails and no post is sent until it is fixed. Text containing a NUL character or broken Unicode (such as a lone surrogate) is refused, because Helm cannot store it.
+
+**Changes after acceptance.** Once Helm has accepted a post, later changes to it are not picked up. Issue a new `id` for different content.
+
+**Not configured.** The endpoint answers 400 until `social_posts_provider` is set.
 
 ### `hashed_id` is not the Helm hash
 

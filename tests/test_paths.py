@@ -4,10 +4,12 @@ from django_helm import paths
 def test_default_constants():
     assert paths.USER_ACCOUNTS == '/helm/user_accounts'
     assert paths.ANALYTICS_EXCLUSION_LIST == '/helm/analytics_exclusion_list'
+    assert paths.SOCIAL_POSTS == '/helm/social_posts'
     assert paths.DEFAULTS == {
         'user_accounts': '/helm/user_accounts',
         'analytics_exclusion_list': '/helm/analytics_exclusion_list',
         'user_emails': '/helm/user_emails',
+        'social_posts': '/helm/social_posts',
     }
 
 
@@ -42,3 +44,10 @@ def test_user_emails_default_and_override(settings):
     assert paths.resolve('user_emails') == '/helm/user_emails'
     settings.HELM_ANALYTICS = {**settings.HELM_ANALYTICS, 'paths': {'user_emails': 'internal/emails'}}
     assert paths.resolve('user_emails') == '/internal/emails'
+
+
+def test_social_posts_default_and_override(settings):
+    settings.HELM_ANALYTICS = {**settings.HELM_ANALYTICS, 'paths': {}}
+    assert paths.resolve('social_posts') == '/helm/social_posts'
+    settings.HELM_ANALYTICS = {**settings.HELM_ANALYTICS, 'paths': {'social_posts': '/custom/posts'}}
+    assert paths.resolve('social_posts') == '/custom/posts'

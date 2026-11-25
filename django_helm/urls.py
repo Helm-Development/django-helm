@@ -11,12 +11,13 @@ name (for example ``{'analytics_exclusion_list': '/internal/exclusions'}``).
 """
 from django.urls import path
 
-from django_helm import paths
+from django_helm import paths, social_posts
 from django_helm.analytics import views
 
 VIEWS = [
     ('analytics_exclusion_list', views.exclusion_list),
     ('user_accounts', views.user_accounts),
+    ('social_posts', social_posts.social_posts),
 ]
 
 
