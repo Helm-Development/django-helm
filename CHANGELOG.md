@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 — unreleased
+## 0.4.0 — 2026-11-25
 
 - New `django_helm.mailer` app and `/helm/user_emails` endpoint. It reports verified accounts that were created or activated and accounts that changed email address, with paging.
 - Email events older than 90 days are purged each time the endpoint is called.
