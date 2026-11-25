@@ -156,7 +156,7 @@ Useful as a Sentry breadcrumb or a debug endpoint to spot queue pressure.
 
 ## Backend endpoints for Helm
 
-Helm can ask your backend three things: how many user accounts you have, which users to leave out of analytics, and which social posts are ready to publish. This section adds all three as endpoints in your Django project.
+Helm can ask your backend four things: how many user accounts you have, which users to leave out of analytics, which verified users have new or changed email addresses, and which social posts are ready to publish. This section adds all four as endpoints in your Django project.
 
 ### Install
 
@@ -166,6 +166,7 @@ Add the app and run its migrations:
 INSTALLED_APPS = [
     # ...
     'django_helm.analytics',
+    'django_helm.mailer',  # only if you want the user emails endpoint
 ]
 ```
 
@@ -173,7 +174,7 @@ INSTALLED_APPS = [
 python manage.py migrate
 ```
 
-This creates two tables, `django_helm_user_analytics` and `django_helm_exclusion_rule`.
+This creates three tables: `django_helm_user_analytics`, `django_helm_exclusion_rule`, and `django_helm_user_email_event` (the last only when `django_helm.mailer` is installed).
 
 ### URLs
 
@@ -207,6 +208,7 @@ While `api_key` is empty, every endpoint answers 404 and `init()` logs a warning
 |---|---|
 | User accounts | `/helm/user_accounts` |
 | Analytics exclusion list | `/helm/analytics_exclusion_list` |
+| User emails | `/helm/user_emails` |
 | Social posts | `/helm/social_posts` |
 
 These match the placeholders in Helm's Backend SDK tab. Leave them alone unless you must move them.
@@ -221,6 +223,7 @@ HELM_ANALYTICS = {
     'paths': {
         'user_accounts': '/api/internal/helm/accounts',
         'analytics_exclusion_list': '/api/internal/helm/exclusions',
+        'user_emails': '/api/internal/helm/emails',
     },
 }
 ```
@@ -310,6 +313,51 @@ Helm reads at most 64 KB per response, roughly 900 exclusions, so keep rules tar
 Select rules in the list and run **Preview matches** to see the first 50 matching values before you rely on them.
 
 `HELM_ANALYTICS['models']` is reserved for future tables that reference non-user entities. Leave it unset.
+
+### User emails endpoint
+
+`/helm/user_emails` tells Helm which verified accounts were created or activated, and which accounts changed their email address, in a time window. Helm uses it to keep your mailing list current. It is served only when `django_helm.mailer` is in `INSTALLED_APPS`; otherwise it answers 404.
+
+**"Verified" means `is_active=True`.** The endpoint reports an account as soon as it is active. That is only correct if your accounts become active only after the user confirms their email address. If you activate accounts at signup, before confirmation, unconfirmed addresses will reach your mailing list.
+
+**User model requirements.** Your user model must have the concrete fields `email`, `is_active` and `date_joined`. Django's default `User` and `AbstractUser` have all three. If one is missing, `manage.py check` fails with `django_helm.E001`. `first_name` and `last_name` are optional; missing names are sent as empty strings.
+
+Helm sends a JSON body with the usual envelope plus a time window. `since` is required and inclusive. `until` is optional, exclusive, and defaults to now. Both are ISO 8601 timestamps. A request where `since` is not before `until` gets HTTP 400.
+
+```json
+{"query": "user_emails", "project": "myapp", "since": "2026-11-01T00:00:00Z", "until": "2026-11-08T00:00:00Z"}
+```
+
+The response:
+
+```json
+{
+  "project": "myapp",
+  "generated_at": "2026-11-08T12:00:00+00:00",
+  "since": "2026-11-01T00:00:00+00:00",
+  "until": "2026-11-08T00:00:00+00:00",
+  "accounts": [
+    {"email": "ada@example.org", "first_name": "Ada", "last_name": "Lovelace", "changed_at": "2026-11-02T09:30:00+00:00"}
+  ],
+  "email_changes": [
+    {"previous_email": "old@example.org", "email": "new@example.org", "changed_at": "2026-11-03T14:05:00+00:00"}
+  ],
+  "has_more": false,
+  "next_since": null
+}
+```
+
+The body is UTF-8 JSON with non-ASCII characters sent as-is, not as `\u` escapes.
+
+**Paging.** A response holds up to 150 accounts and 75 email changes, and is kept under a 56 KiB byte budget. When more remain, `has_more` is `true` and `next_since` is the `since` for the next request. Rows that share a timestamp are never split across pages. To stay under the budget, whole groups of same-timestamp rows are dropped from the end of a page and sent on the next one. One limitation: a single group of rows sharing one timestamp is always sent whole, so a page can exceed the budget, or the count limits, when many accounts share a timestamp (for example, users created in one `bulk_create`).
+
+**How changes are recorded.** A `pre_save`/`post_save` receiver pair on your user model records events in the `django_helm_user_email_event` table. `pre_save` reads the stored row; `post_save` writes the event, so a save that fails records nothing. An `activated` event is recorded when an inactive user becomes active. An `email_changed` event is recorded when a user who is active before and after the save changes address. A change that only alters letter case records nothing. A `post_delete` receiver deletes a user's events when the user is deleted. New users are found from `date_joined`, so signup needs no event. Events older than 90 days are purged each time Helm calls the endpoint.
+
+Only changes that go through `Model.save()` after `django_helm.mailer` is installed are recorded. `QuerySet.update()`, `bulk_update`, raw SQL and `loaddata` fixtures bypass the receivers and are not recorded. Accounts that existed before you installed the app are still reported by `date_joined` when it falls in the window, but older activations and address changes are not.
+
+**Reserved domains.** Addresses ending in `.local`, `.invalid`, `.test`, `.example`, or `.localhost` are never returned. A change to a reserved address is skipped. A change from a blank or reserved address to a real one is reported as a new account, not as an email change.
+
+**Privacy:** the response carries no user id and no Helm hash, on purpose. This keeps Helm from ever tying an email address to analytics, which are pseudonymous. Do not add either field, and do not join this data with the analytics tables.
 
 ### Social posts endpoint
 

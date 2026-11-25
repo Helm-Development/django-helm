@@ -4,15 +4,13 @@ Defaults rely only on fields Django's ``AbstractUser`` guarantees. A customer
 whose user model differs supplies ``HELM_ANALYTICS['user_accounts_counter']``,
 a dotted path to a callable ``(since) -> dict`` whose values override defaults.
 """
-from datetime import datetime, timezone
-
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import FieldError, ImproperlyConfigured
 from django.db.models import Count, Q
 from django.utils.module_loading import import_string
 
-from django_helm.endpoints import BadRequest
+from django_helm.endpoints import parse_timestamp
 
 from .exclusions import excluded_user_hashes
 
@@ -24,25 +22,7 @@ FIELDS = (
 
 
 def parse_since(value):
-    """Parse an ISO 8601 string; naive values are taken as UTC.
-
-    Returns an aware UTC datetime, or a naive UTC one when ``USE_TZ`` is off.
-    Raises ``BadRequest`` for anything that is not an ISO 8601 string.
-    """
-    message = 'since must be an ISO 8601 timestamp'
-    if not isinstance(value, str):
-        raise BadRequest(message)
-    if value.endswith('Z'):
-        value = value[:-1] + '+00:00'
-    try:
-        parsed = datetime.fromisoformat(value)
-    except ValueError:
-        raise BadRequest(message) from None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    if not settings.USE_TZ:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
-    return parsed
+    return parse_timestamp(value, 'since')
 
 
 # Output field -> aggregate names it is derived from.

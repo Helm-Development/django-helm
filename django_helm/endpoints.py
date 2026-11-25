@@ -12,7 +12,7 @@ or not, is marked ``Cache-Control: no-store``. The view never touches
 """
 import hmac
 import json
-from datetime import timezone as dt_timezone
+from datetime import datetime, timezone as dt_timezone
 from functools import wraps
 
 from django.conf import settings
@@ -64,20 +64,45 @@ def _parse_body(request):
     return body if isinstance(body, dict) else None
 
 
-def helm_endpoint(query):
-    """Decorate ``fn(request, body) -> dict`` as a Helm-facing JSON view."""
+def parse_timestamp(value, field):
+    """Parse an ISO 8601 string; naive values are taken as UTC.
+
+    Returns an aware UTC datetime, or a naive UTC one when ``USE_TZ`` is off.
+    Raises ``BadRequest`` for anything that is not an ISO 8601 string.
+    """
+    message = f'{field} must be an ISO 8601 timestamp'
+    if not isinstance(value, str):
+        raise BadRequest(message)
+    if value.endswith('Z'):
+        value = value[:-1] + '+00:00'
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        raise BadRequest(message) from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt_timezone.utc)
+    if not settings.USE_TZ:
+        parsed = parsed.astimezone(dt_timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def helm_endpoint(query, json_dumps_params=None):
+    """Decorate ``fn(request, body) -> dict`` as a Helm-facing JSON view.
+
+    ``json_dumps_params`` is passed to ``JsonResponse`` for the success body.
+    """
 
     def decorator(fn):
         @wraps(fn)
         def view(request):
-            return _no_store(_handle(request, query, fn))
+            return _no_store(_handle(request, query, fn, json_dumps_params))
 
         return login_not_required(csrf_exempt(view))
 
     return decorator
 
 
-def _handle(request, query, fn):
+def _handle(request, query, fn, json_dumps_params=None):
     config = settings.HELM_ANALYTICS
     configured = config.get('api_key')
     if not configured:
@@ -97,6 +122,6 @@ def _handle(request, query, fn):
     if body.get('project') != config['project']:
         return _error('unknown project')
     try:
-        return JsonResponse(fn(request, body))
+        return JsonResponse(fn(request, body), json_dumps_params=json_dumps_params)
     except BadRequest as exc:
         return _error(str(exc))
